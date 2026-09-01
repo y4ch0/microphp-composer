@@ -1,0 +1,1 @@
+<h1>This is admin subpage of /posts route and its locked only to user with admin role.</h1>

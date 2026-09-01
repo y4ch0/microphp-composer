@@ -1,0 +1,1 @@
+<h1>This route is accessible for everyone!</h1>

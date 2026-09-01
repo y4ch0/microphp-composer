@@ -1,0 +1,17 @@
+.btn {
+    display: inline-block;
+    padding: 0.5em 1.2em;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.btn-primary {
+    background-color: #15ff00;
+    color: #000000;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+    color: #fff;
+}
