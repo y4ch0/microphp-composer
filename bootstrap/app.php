@@ -110,6 +110,7 @@ function app(?string $abstract = null): mixed
 
         $container->singleton(MicroPHP\Logger::class, static fn () => new MicroPHP\Logger(ROOT_PATH . '/var/log/app.log'));
         $container->singleton(MicroPHP\Database::class, static fn () => MicroPHP\Database::getInstance());
+        $container->singleton(MicroPHP\Security\Csrf::class, static fn () => new MicroPHP\Security\Csrf());
     }
 
     return $abstract === null ? $container : $container->make($abstract);

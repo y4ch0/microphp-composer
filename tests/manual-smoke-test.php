@@ -11,8 +11,8 @@
  * script gives you a fast way to verify the framework still behaves after
  * changes: `php tests/manual-smoke-test.php`.
  *
- * Runs against your real database/library.db inside a transaction. It inserts,
- * checks, updates, deletes, and then rolls the transaction back.
+ * Database checks use a disposable SQLite file created for this run. The demo
+ * database/library.db is never opened by this script.
  */
 
 define('ROOT_PATH', dirname(__DIR__));
@@ -28,6 +28,7 @@ use MicroPHP\Http\Request;
 use MicroPHP\Http\Response;
 use MicroPHP\Routing\MethodResolver;
 use MicroPHP\Routing\RouteResolver;
+use MicroPHP\Routing\RoutingConfigurationException;
 use MicroPHP\Router;
 
 $failures = 0;
@@ -110,6 +111,16 @@ check('rejects plain traversal attempts', $resolver->resolve($fixture, '/../conf
 check('rejects encoded traversal attempts', $resolver->resolve($fixture, '/%2e%2e/config') === null);
 check('rejects encoded slash attempts', $resolver->resolve($fixture, '/users/a%2Fb') === null);
 
+mkdir($fixture . '/ambiguous/[first]', 0777, true);
+mkdir($fixture . '/ambiguous/[second]', 0777, true);
+$ambiguousRejected = false;
+try {
+    $resolver->resolve($fixture, '/ambiguous/value');
+} catch (RoutingConfigurationException) {
+    $ambiguousRejected = true;
+}
+check('rejects ambiguous dynamic route directories', $ambiguousRejected);
+
 $methodResolver = new MethodResolver();
 check('method resolver whitelists method filenames', $methodResolver->resolve($fixture . '/users/new', 'GET') !== null);
 check('method resolver rejects arbitrary method filenames', $methodResolver->resolve($fixture . '/users/new', 'TRACE') === null);
@@ -190,6 +201,23 @@ check('filesystem API HEAD falls back to GET without a body', $fsHead->status() 
 
 $fsOptions = (new Api())->dispatch(Request::create('OPTIONS', '/api/v1/status'));
 check('filesystem API OPTIONS is generated centrally', $fsOptions->status() === 204 && ($fsOptions->headers()['Allow'] ?? null) === 'GET, HEAD, OPTIONS');
+
+$traversalPaths = [
+    '/api/../pages',
+    '/api/../api/v1/status',
+    '/api/%2e%2e/pages',
+    '/api/%252e%252e/pages',
+    '/api/..\\pages',
+    '/api/%5c..%5cpages',
+    '/api/v1/../../config',
+    '/api/v1/%2e%2e/status',
+];
+$allTraversalRejected = true;
+foreach ($traversalPaths as $traversalPath) {
+    $traversalResponse = (new Api())->dispatch(Request::create('GET', $traversalPath));
+    $allTraversalRejected = $allTraversalRejected && in_array($traversalResponse->status(), [400, 404], true);
+}
+check('API rejects plain, encoded, repeated, slash, and backslash traversal', $allTraversalRejected);
 
 echo "== API Generator ==\n";
 $generatedRouteName = '__generator_smoke_' . str_replace('.', '_', uniqid('', true));
@@ -305,6 +333,14 @@ check('application does not expose app source files', $appSourceResponse->status
 check('application does not expose framework source files', $frameworkSourceResponse->status() === 404);
 
 echo "== Database Drivers ==\n";
+$smokeDatabaseFile = tempnam(sys_get_temp_dir(), 'microphp-smoke-db-');
+$smokePdo = new PDO('sqlite:' . $smokeDatabaseFile, options: [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$smokePdo->exec('CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, content TEXT, created_at TEXT)');
+$smokePdo->exec('CREATE TABLE uzytkownik (id INTEGER PRIMARY KEY, imie TEXT)');
+$smokePdo->exec('CREATE TABLE wypozyczenie (id INTEGER PRIMARY KEY, id_uzytkownik INTEGER)');
+$smokePdo->exec("INSERT INTO uzytkownik (id, imie) VALUES (1, 'Ada')");
+$smokePdo->exec('INSERT INTO wypozyczenie (id, id_uzytkownik) VALUES (1, 1)');
+Database::usePdo($smokePdo);
 check('recognizes MariaDB driver', DbDriver::fromName('mariadb') === DbDriver::MariaDb);
 check('recognizes SQL Server aliases', DbDriver::fromName('sqlserver') === DbDriver::SqlServer && DbDriver::fromName('mssql') === DbDriver::SqlServer);
 check('recognizes MongoDB aliases', DbDriver::fromName('mongodb') === DbDriver::MongoDb && DbDriver::fromName('mongo') === DbDriver::MongoDb);
@@ -432,4 +468,5 @@ try {
 }
 
 echo "\n" . ($failures === 0 ? "All checks passed.\n" : "{$failures} check(s) failed.\n");
+@unlink($smokeDatabaseFile);
 exit($failures === 0 ? 0 : 1);

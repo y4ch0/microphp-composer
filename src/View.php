@@ -1,430 +1,333 @@
 <?php
-/**
- * MicroPHP Framework
- * View and template engine.
- */
+
+declare(strict_types=1);
 
 namespace MicroPHP;
 
-class View
+use InvalidArgumentException;
+use RuntimeException;
+use Throwable;
+
+final class View
 {
-  private static ?string $viewsPath = null;
-  private static ?string $cachePath = null;
-  private static ?string $componentsPath = null;
-  private static ?string $csrfSessionKey = '_microphp_csrf_token';
-  private static ?ViewCache $cache = null;
+    private static ?string $viewsPath = null;
+    private static ?string $cachePath = null;
+    private static ?string $componentsPath = null;
+    private static ?ViewCache $cache = null;
 
-  private static function viewsPath(): string
-  {
-    return self::$viewsPath ?? (defined('PAGES_PATH') ? PAGES_PATH : ROOT_PATH . '/app/pages');
-  }
+    public function __construct(private readonly ?AssetManager $assets = null) {}
 
-  private static function cachePath(): string
-  {
-    return self::$cachePath ?? (defined('VIEW_CACHE_PATH') ? VIEW_CACHE_PATH : ROOT_PATH . '/var/cache/views');
-  }
-
-  private static function componentsPath(): string
-  {
-    return self::$componentsPath ?? (defined('COMPONENTS_PATH')
-        ? COMPONENTS_PATH
-        : (defined('COMPONENT_ASSETS_PATH')
-          ? COMPONENT_ASSETS_PATH
-        : ROOT_PATH . '/app/components'));
-  }
-
-  private static function cache(): ViewCache
-  {
-    if (self::$cache === null) {
-      $trust = defined('VIEW_CACHE_TRUST') && VIEW_CACHE_TRUST === true;
-      self::$cache = new ViewCache(self::cachePath(), $trust);
-    }
-    return self::$cache;
-  }
-
-  /**
-   * Override the default framework paths used by the view engine.
-   *
-   * @param string|null $viewsPath Absolute path to the pages directory.
-   * @param string|null $cachePath Absolute path to the compiled view cache directory.
-   * @param string|null $componentsPath Absolute path to the component asset/template directory.
-   * @return void
-   */
-  public static function configurePaths(
-    ?string $viewsPath = null,
-    ?string $cachePath = null,
-    ?string $componentsPath = null
-  ): void {
-    self::$viewsPath = $viewsPath;
-    self::$cachePath = $cachePath;
-    self::$componentsPath = $componentsPath;
-    self::$cache = null;
-  }
-
-  /**
-   * Render a named view.
-   *
-   * @param string $view Dotted view name relative to the pages directory.
-   * @param array<string,mixed> $data Data exposed to the view.
-   * @return string Rendered view output.
-   */
-  public static function render(string $view, array $data = [])
-  {
-    return self::renderFile(self::viewToFile($view), $data);
-  }
-
-  /**
-   * Render a view file through the template cache.
-   *
-   * @param string $file Absolute path to a .micro.php template file.
-   * @param array<string,mixed> $data Data exposed to the template.
-   * @return string Rendered template output.
-   */
-  public static function renderFile(string $file, array $data = [])
-  {
-    if (!file_exists($file)) {
-      throw new \Exception("View not found: {$file}");
+    public static function configurePaths(?string $viewsPath = null, ?string $cachePath = null, ?string $componentsPath = null): void
+    {
+        self::$viewsPath = $viewsPath;
+        self::$cachePath = $cachePath;
+        self::$componentsPath = $componentsPath;
+        self::$cache = null;
     }
 
-    $cacheFile = self::cache()->resolve($file, [self::class, 'compile']);
-
-    // Expose data keys as template variables.
-    extract($data, EXTR_SKIP);
-
-    // Provide an instance for templates that expect view-level helpers.
-    $__view_instance = new self();
-
-    if (session_status() !== PHP_SESSION_ACTIVE) {
-      @session_start();
+    public static function render(string $view, array $data = []): string
+    {
+        return (new self())->renderNamed($view, $data);
     }
 
-    if (!defined('MICROPHP_VIEW_CONTEXT')) {
-      define('MICROPHP_VIEW_CONTEXT', true);
+    public function renderNamed(string $view, array $data = []): string
+    {
+        return $this->renderTemplateFile(self::viewToFile($view), $data);
     }
 
-    // Buffer and include the compiled template.
-    ob_start();
-    try {
-        include $cacheFile;
-    } catch (\Throwable $e) {
-        ob_end_clean();
-        throw $e;
-    }
-    return ob_get_clean();
-  }
-
-  /**
-   * Echo a named view from inside another template.
-   *
-   * @param string $view Dotted view name relative to the pages directory.
-   * @param array<string,mixed> $data Data exposed to the included view.
-   * @return void
-   */
-  public static function include(string $view, array $data = [])
-  {
-    echo self::render($view, $data);
-  }
-
-  /**
-   * Echo a class-based component resolved from a template component name.
-   *
-   * @param string $view Template component name, such as "button" or "forms.input".
-   * @param array<string,mixed> $data Props passed to the component constructor.
-   * @return void
-   */
-  public static function component(string $view, array $data = []) {
-    $class = Component::resolveClass($view);
-    if ($class === null) {
-      throw new \RuntimeException("Component class not found: {$view}");
+    public static function renderFile(string $file, array $data = []): string
+    {
+        return (new self())->renderTemplateFile($file, $data);
     }
 
-    echo $class::renderComponent($data);
-  }
-
-  /**
-   * Warm up the cache for all page and component templates.
-   *
-   * @return array{compiled: int, errors: array<string,string>}
-   */
-  public static function warmCache(): array
-  {
-    return self::cache()->warmAll(self::allMicroFiles(), [self::class, 'compile']);
-  }
-
-  /**
-   * Clear compiled view cache files.
-   *
-   * @return int Number of deleted cache files.
-   */
-  public static function clearCache(): int
-  {
-    return self::cache()->clearAll();
-  }
-
-  /**
-   * Return compiled view cache statistics.
-   *
-   * @return array{files: int, bytes: int, oldest: ?int, newest: ?int}
-   */
-  public static function cacheStats(): array
-  {
-    return self::cache()->stats();
-  }
-
-  /**
-   * Compile template source into executable PHP.
-   *
-   * @param string $source Raw template source.
-   * @return string Compiled PHP template source.
-   */
-  public static function compile(string $source): string
-  {
-    return self::compileString($source);
-  }
-
-  /**
-   * Return all .micro.php files from the page and component template directories.
-   *
-   * @return string[] Absolute template file paths.
-   */
-  private static function allMicroFiles(): array
-  {
-    $files = [];
-    foreach ([self::viewsPath(), self::componentsPath()] as $dir) {
-      if (!is_dir($dir)) {
-        continue;
-      }
-      $iterator = new \RecursiveIteratorIterator(
-        new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)
-      );
-      foreach ($iterator as $fileInfo) {
-        if ($fileInfo->isFile() && str_ends_with($fileInfo->getFilename(), '.micro.php')) {
-          $files[] = $fileInfo->getPathname();
+    public function renderTemplateFile(string $file, array $data = []): string
+    {
+        $realFile = realpath($file);
+        if ($realFile === false || !is_file($realFile)) {
+            throw new RuntimeException("View not found: {$file}");
         }
-      }
+        if (!self::isInsideTemplateRoots($realFile)) {
+            throw new RuntimeException('Template is outside the configured view roots.');
+        }
+        return $this->renderResolvedFile($realFile, $data);
     }
-    return $files;
-  }
 
-  /**
-   * Convert a dotted view name to a file path.
-   *
-   * @param string $view Dotted view name.
-   * @return string Absolute view file path.
-   */
-  private static function viewToFile(string $view): string
-  {
-    $view = str_replace('.', '/', $view);
-    $file = rtrim(self::viewsPath(), '/\\') . '/' . ltrim($view, '/\\') . '.micro.php';
-    return $file;
-  }
-
-  /**
-   * Compile template content by converting MicroPHP directives to PHP.
-   *
-   * @param string $content Raw template content.
-   * @return string Compiled PHP template content.
-   */
-  private static function compileString(string $content): string
-  {
-    // 1) Remove blade-style comments {{-- comment --}}
-    $content = preg_replace('/\{\{\-\-\s*([\s\S]*?)\s*\-\-\}\}/', '', $content);
-
-    // 2) @php ... @endphp -> <?php ... >
-    $content = preg_replace('/@php\b/', '<?php', $content);
-    $content = preg_replace('/@endphp\b/', '?>', $content);
-
-    // 3) @use("Some\Name\Space") -> use Some\Name\Space;
-    $content = preg_replace_callback('/@use\(\s*[\'"](.+?)[\'"]\s*\)/', function($m){
-      return '<?php use ' . $m[1] . '; ?>';
-    }, $content);
-
-    // 4) @continue(condition) and @break(condition)
-    $content = preg_replace_callback('/@continue\(\s*(.*?)\s*\)/', function($m){
-      return '<?php if('.$m[1].'){ continue; } ?>';
-    }, $content);
-    $content = preg_replace_callback('/@break\(\s*(.*?)\s*\)/', function($m){
-      return '<?php if('.$m[1].'){ break; } ?>';
-    }, $content);
-    // Also allow bare @break and @continue without conditions.
-    $content = preg_replace('/@break\b/', '<?php break; ?>', $content);
-    $content = preg_replace('/@continue\b/', '<?php continue; ?>', $content);
-
-    // 5) Handle @csrf -> hidden input.
-    //
-    // The token must be read at render time, not at compile time. Compiled
-    // cache files are shared across requests, so embedding a literal token here
-    // would leak the token generated during compilation to later visitors.
-    $content = preg_replace(
-      '/@csrf\b/',
-      '<?php echo \'<input type="hidden" name="_token" value="\' . '
-      . 'htmlspecialchars(\MicroPHP\View::csrfToken(), ENT_QUOTES, \'UTF-8\') . \'" />\'; ?>',
-      $content
-    );
-
-    // 6) Blade-style echo {{ ... }} -> <?= htmlspecialchars(..., ENT_QUOTES, 'UTF-8') (escaped)
-    $content = preg_replace_callback('/\{\!\!\s*(.+?)\s*\!\!\}/s', function($m){
-      return '<?php echo ' . $m[1] . '; ?>';
-    }, $content);
-    $content = preg_replace_callback('/\{\{\s*(.+?)\s*\}\}/s', function($m){
-      return '<?php echo htmlspecialchars(' . $m[1] . ', ENT_QUOTES, \'UTF-8\'); ?>';
-    }, $content);
-
-    // 7) @class([...]) -> output class=""
-    $content = preg_replace_callback('/@class\(\s*(\[(?:.|\s)*?\])\s*\)/s', function($m) {
-        $arrayPhp = $m[1];
-        $php = '<?php ' .
-            '$__class_arr = ' . $arrayPhp . ';' .
-            'if (is_array($__class_arr)) {' .
-                '$__class_result = [];' .
-                'foreach ($__class_arr as $k => $v) {' .
-                    'if (is_int($k)) { if ($v) $__class_result[] = $v; }' .
-                    'else { if ($v) $__class_result[] = $k; }' .
-                '}' .
-                '$__class_final = trim(implode(" ", array_filter($__class_result)));' .
-            '} else { $__class_final = (string)$__class_arr; }' .
-            'if (!empty($__class_final)) { echo " class=\"" . htmlspecialchars($__class_final, ENT_QUOTES, "UTF-8") . "\""; } ?>';
-        return $php;
-    }, $content);
-
-    // 8) @style([...]) -> output style=""
-    $content = preg_replace_callback('/@style\(\s*(\[(?:.|\s)*?\])\s*\)/s', function($m) {
-        $arrayPhp = $m[1];
-        $php = '<?php ' .
-            '$__style_arr = ' . $arrayPhp . ';' .
-            'if (is_array($__style_arr)) {' .
-                '$__style_result = [];' .
-                'foreach ($__style_arr as $__key => $__value) {' .
-                    'if (!is_string($__value) && !is_numeric($__value)) {' .
-                        'if ($__value) { $__style_result[] = rtrim((string)$__key, ";"); }' .
-                    '} elseif (is_numeric($__key)) {' .
-                        'if (is_string($__value) && trim($__value) !== "") { $__style_result[] = rtrim($__value, ";"); }' .
-                    '} else {' .
-                        'if ((is_string($__value) || is_numeric($__value)) && (string)$__value !== "") { $__style_result[] = $__key . ":" . $__value; }' .
-                    '}' .
-                '}' .
-                '$__style_final = implode("; ", array_filter($__style_result));' .
-            '} else { $__style_final = (string)$__style_arr; }' .
-            'if (!empty($__style_final)) { echo " style=\"" . trim(rtrim($__style_final, "; ")) . ";\""; } ?>';
-        return $php;
-    }, $content);
-
-
-    // 9) Attributes shortcuts:
-    $content = preg_replace_callback(
-      '/@value\(\s*("[^"]*"|\$[a-zA-Z_][a-zA-Z0-9_]*|[a-zA-Z_][a-zA-Z0-9_]*\([^)]*\))\s*\)/',
-      function($matches) {
-        return '<?php echo \'value="\' . htmlspecialchars(' . $matches[1] . ') . \'"\' ?>';
-      },
-      $content
-    );
-
-    // - value="{{ $var }}" already handled by {{ }} -> escaped
-    // - boolean attributes: disabled, readonly when used like: disabled="@someCondition" or simply disabled
-    // We'll provide helper syntax: disabled="@condition" -> <?php if(condition) echo "disabled";
-    $content = preg_replace_callback('/\b(disabled|readonly|checked|selected)\s*=\s*"(?:\s*)@([^"]+)"/', function($m){
-      $attr = $m[1];
-      $cond = $m[2];
-      return '<?php if('.$cond.'): echo "'.$attr.'=\"'.$attr.'\""; endif; ?>';
-    }, $content);
-
-    // Also handle disabled="@condition" without quotes: disabled=@condition
-    $content = preg_replace_callback('/\b(disabled|readonly|checked|selected)\s*=\s*@([^\s>]+)/', function($m){
-      $attr = $m[1];
-      $cond = $m[2];
-      return '<?php if('.$cond.'): echo "'.$attr.'=\"'.$attr.'\""; endif; ?>';
-    }, $content);
-
-    // Also allow boolean attributes written as simply: @disabled($cond) -> prints disabled when true
-    $content = preg_replace_callback('/@disabled\(\s*(.*?)\s*\)/', function($m){
-      return '<?php if('.$m[1].'): echo "disabled=\"disabled\""; endif; ?>';
-    }, $content);
-    $content = preg_replace_callback('/@readonly\(\s*(.*?)\s*\)/', function($m){
-      return '<?php if('.$m[1].'): echo "readonly=\"readonly\""; endif; ?>';
-    }, $content);
-    $content = preg_replace_callback('/@checked\(\s*(.*?)\s*\)/', function($m){
-      return '<?php if('.$m[1].'): echo "checked=\"checked\""; endif; ?>';
-    }, $content);
-    $content = preg_replace_callback('/@selected\(\s*(.*?)\s*\)/', function($m){
-      return '<?php if('.$m[1].'): echo "selected=\"selected\""; endif; ?>';
-    }, $content);
-
-    $content = preg_replace_callback('/@isset\s*\((.*?)\)/', function($m){
-      return '<?php if('.$m[1].'): ?>';
-    }, $content);
-
-    $content = preg_replace_callback('/@endisset/', function($m){
-      return '<?php endif; ?>';
-    }, $content);
-
-
-    // 10) @include("view", ['a'=>1]) and class-based @component("name", ['a'=>1]).
-    // Compile both into PHP calls; if the second argument is missing, pass [].
-    $content = preg_replace_callback(
-      '/@include\(\s*[\'"](.+?)[\'"]\s*(?:,\s*(.+?))?\s*\)/s',
-      function($m){
-        $view = $m[1];
-        $arg = isset($m[2]) && trim($m[2]) !== '' ? $m[2] : '[]';
-        return '<?php \MicroPHP\View::include("'.$view.'", '.$arg.'); ?>';
-      },
-      $content
-    );
-    $content = preg_replace_callback(
-      '/@component\(\s*[\'"](.+?)[\'"]\s*(?:,\s*(.+?))?\s*\)/s',
-      function($m){
-        $view = $m[1];
-        $arg = isset($m[2]) && trim($m[2]) !== '' ? $m[2] : '[]';
-        return '<?php \MicroPHP\View::component("'.$view.'", '.$arg.'); ?>';
-      },
-      $content
-    );
-
-    // 11) Simple control structures/@directives commonly expected:
-    // @if (...) @endif, @elseif, @else
-    $content = preg_replace('/@if\s*\((.*?)\)/', '<?php if($1): ?>', $content);
-    $content = preg_replace('/@elseif\s*\((.*?)\)/', '<?php elseif($1): ?>', $content);
-    $content = preg_replace('/@else\b/', '<?php else: ?>', $content);
-    $content = preg_replace('/@endif\b/', '<?php endif; ?>', $content);
-
-    // @foreach/@endforeach, @for/@endfor, @while/@endwhile
-    $content = preg_replace('/@foreach\s*\((.*?)\)/', '<?php foreach($1): ?>', $content);
-    $content = preg_replace('/@endforeach\b/', '<?php endforeach; ?>', $content);
-    $content = preg_replace('/@for\s*\((.*?)\)/', '<?php for($1): ?>', $content);
-    $content = preg_replace('/@endfor\b/', '<?php endfor; ?>', $content);
-    $content = preg_replace('/@while\s*\((.*?)\)/', '<?php while($1): ?>', $content);
-    $content = preg_replace('/@endwhile\b/', '<?php endwhile; ?>', $content);
-
-    // 12) Raw PHP echo shorthand for <?= ... is allowed through {!! ... !!} earlier
-
-    return $content;
-  }
-
-  /**
-   * Ensure the CSRF token exists in the current session.
-   *
-   * @return void
-   */
-  private static function ensureCsrfToken()
-  {
-    if (session_status() !== PHP_SESSION_ACTIVE) {
-      @session_start();
+    public static function renderTrustedFile(string $file, array $data = []): string
+    {
+        $realFile = realpath($file);
+        if ($realFile === false || !is_file($realFile)) {
+            throw new RuntimeException("View not found: {$file}");
+        }
+        return (new self())->renderResolvedFile($realFile, $data);
     }
-    if (empty($_SESSION[self::$csrfSessionKey])) {
-      $_SESSION[self::$csrfSessionKey] = bin2hex(random_bytes(32));
-    }
-  }
 
-  /**
-   * Get the CSRF token for the current session.
-   *
-   * @return string Current CSRF token.
-   */
-  public static function csrfToken(): string
-  {
-    if (session_status() !== PHP_SESSION_ACTIVE) {
-      @session_start();
+    public static function include(string $view, array $data = []): void
+    {
+        echo self::render($view, $data);
     }
-    self::ensureCsrfToken();
-    return $_SESSION[self::$csrfSessionKey];
-  }
+
+    public function renderInclude(string $view, array $data = []): void
+    {
+        echo $this->renderNamed($view, $data);
+    }
+
+    public static function component(string $view, array $data = []): void
+    {
+        (new self())->renderComponent($view, $data);
+    }
+
+    public function renderComponent(string $view, array $data = []): void
+    {
+        $class = Component::resolveClass($view);
+        if ($class === null) {
+            throw new RuntimeException("Component class not found: {$view}");
+        }
+        echo $class::renderComponent($data, $this->assets);
+    }
+
+    public static function warmCache(): array
+    {
+        return self::cache()->warmAll(self::allMicroFiles(), [self::class, 'compile']);
+    }
+
+    public static function clearCache(): int { return self::cache()->clearAll(); }
+    public static function cacheStats(): array { return self::cache()->stats(); }
+    public static function compile(string $source): string { return self::compileString($source); }
+
+    private function renderResolvedFile(string $file, array $variables): string
+    {
+        $cacheFile = self::cache()->resolve($file, [self::class, 'compile']);
+        extract($variables, EXTR_SKIP);
+        $__view_instance = $this;
+        if (session_status() !== PHP_SESSION_ACTIVE) { @session_start(); }
+        if (!defined('MICROPHP_VIEW_CONTEXT')) { define('MICROPHP_VIEW_CONTEXT', true); }
+        ob_start();
+        try { include $cacheFile; }
+        catch (Throwable $e) { ob_end_clean(); throw $e; }
+        return ob_get_clean();
+    }
+
+    private static function compileString(string $content): string
+    {
+        $content = preg_replace('/\{\{\-\-[\s\S]*?\-\-\}\}/', '', $content) ?? $content;
+        self::validateBlockDirectives($content);
+        $content = preg_replace('/@php\b/', '<?php', $content) ?? $content;
+        $content = preg_replace('/@endphp\b/', '?>', $content) ?? $content;
+        $content = preg_replace('/@csrf\b/', '<?php echo \\MicroPHP\\View::csrfField(); ?>', $content) ?? $content;
+
+        foreach (['include', 'component'] as $directive) {
+            $content = self::replaceDirective($content, $directive, static function (string $expression) use ($directive): string {
+                $arguments = self::splitTopLevel($expression);
+                if (count($arguments) < 1 || count($arguments) > 2 || trim($arguments[0]) === '') {
+                    throw new RuntimeException("Malformed @{$directive} directive.");
+                }
+                $arguments[1] = $arguments[1] ?? '[]';
+                $method = $directive === 'include' ? 'renderInclude' : 'renderComponent';
+                return '<?php $__view_instance->' . $method . '(' . $arguments[0] . ', ' . $arguments[1] . '); ?>';
+            });
+        }
+
+        $content = self::replaceDirective($content, 'class', static fn (string $e): string => '<?php echo \\MicroPHP\\View::classAttribute(' . $e . '); ?>');
+        $content = self::replaceDirective($content, 'style', static fn (string $e): string => '<?php echo \\MicroPHP\\View::styleAttribute(' . $e . '); ?>');
+        $content = self::replaceDirective($content, 'value', static fn (string $e): string => '<?php echo \\MicroPHP\\View::valueAttribute(' . $e . '); ?>');
+
+        foreach (['disabled', 'readonly', 'checked', 'selected'] as $attribute) {
+            $content = self::replaceDirective($content, $attribute, static fn (string $e): string => '<?php if (' . $e . ') echo "' . $attribute . '=\\"' . $attribute . '\\""; ?>');
+        }
+
+        $control = [
+            'elseif' => static fn (string $e): string => '<?php elseif (' . $e . '): ?>',
+            'if' => static fn (string $e): string => '<?php if (' . $e . '): ?>',
+            'foreach' => static fn (string $e): string => '<?php foreach (' . $e . '): ?>',
+            'for' => static fn (string $e): string => '<?php for (' . $e . '): ?>',
+            'while' => static fn (string $e): string => '<?php while (' . $e . '): ?>',
+            'isset' => static fn (string $e): string => '<?php if (isset(' . $e . ')): ?>',
+            'continue' => static fn (string $e): string => '<?php if (' . $e . ') continue; ?>',
+            'break' => static fn (string $e): string => '<?php if (' . $e . ') break; ?>',
+        ];
+        foreach ($control as $directive => $compiler) {
+            $content = self::replaceDirective($content, $directive, $compiler);
+        }
+
+        $content = preg_replace_callback('/@use\(\s*([\'\"])([^\'\"]+)\1\s*\)/', static fn (array $m): string => '<?php use ' . $m[2] . '; ?>', $content) ?? $content;
+        foreach (['endforeach' => 'endforeach', 'endfor' => 'endfor', 'endwhile' => 'endwhile'] as $directive => $statement) {
+            $content = preg_replace('/@' . $directive . '\b/', '<?php ' . $statement . '; ?>', $content) ?? $content;
+        }
+        $content = preg_replace('/@(endisset|endif)\b/', '<?php endif; ?>', $content) ?? $content;
+        $content = preg_replace('/@else\b/', '<?php else: ?>', $content) ?? $content;
+        $content = preg_replace('/@break\b/', '<?php break; ?>', $content) ?? $content;
+        $content = preg_replace('/@continue\b/', '<?php continue; ?>', $content) ?? $content;
+        $content = preg_replace_callback('/\{!!\s*(.+?)\s*!!\}/s', static fn (array $m): string => '<?php echo ' . $m[1] . '; ?>', $content) ?? $content;
+        $content = preg_replace_callback('/\{\{\s*(.+?)\s*\}\}/s', static fn (array $m): string => '<?php echo \\MicroPHP\\View::escape(' . $m[1] . '); ?>', $content) ?? $content;
+
+        if (preg_match('/@(if|elseif|foreach|for|while|isset|include|component|class|style|value)\s*\(/', $content, $match) === 1) {
+            throw new RuntimeException('Malformed @' . $match[1] . ' directive.');
+        }
+        return $content;
+    }
+
+    private static function validateBlockDirectives(string $content): void
+    {
+        foreach (['if' => 'endif', 'foreach' => 'endforeach', 'for' => 'endfor', 'while' => 'endwhile', 'isset' => 'endisset'] as $open => $close) {
+            preg_match_all('/@' . $open . '\s*\(/', $content, $openMatches);
+            preg_match_all('/@' . $close . '\b/', $content, $closeMatches);
+            if (count($openMatches[0]) !== count($closeMatches[0])) {
+                throw new RuntimeException("Malformed @{$open} block.");
+            }
+        }
+    }
+
+    /** @param callable(string):string $compiler */
+    private static function replaceDirective(string $content, string $name, callable $compiler): string
+    {
+        $offset = 0;
+        $pattern = '/@' . preg_quote($name, '/') . '\s*\(/';
+        while (preg_match($pattern, $content, $match, PREG_OFFSET_CAPTURE, $offset) === 1) {
+            $matched = $match[0][0];
+            $start = $match[0][1];
+            $open = $start + strrpos($matched, '(');
+            [$expression, $close] = self::balancedExpression($content, $open, $name);
+            $replacement = $compiler(trim($expression));
+            $content = substr($content, 0, $start) . $replacement . substr($content, $close + 1);
+            $offset = $start + strlen($replacement);
+        }
+        return $content;
+    }
+
+    /** @return array{0:string,1:int} */
+    private static function balancedExpression(string $content, int $open, string $name): array
+    {
+        $pairs = ['(' => ')', '[' => ']', '{' => '}'];
+        $stack = [')'];
+        $quote = null;
+        $escaped = false;
+        for ($i = $open + 1, $length = strlen($content); $i < $length; $i++) {
+            $char = $content[$i];
+            if ($quote !== null) {
+                if ($escaped) { $escaped = false; continue; }
+                if ($char === '\\') { $escaped = true; continue; }
+                if ($char === $quote) { $quote = null; }
+                continue;
+            }
+            if ($char === "'" || $char === '"') { $quote = $char; continue; }
+            if (isset($pairs[$char])) { $stack[] = $pairs[$char]; continue; }
+            if (in_array($char, [')', ']', '}'], true)) {
+                if (array_pop($stack) !== $char) { throw new RuntimeException("Malformed @{$name} directive."); }
+                if ($stack === []) { return [substr($content, $open + 1, $i - $open - 1), $i]; }
+            }
+        }
+        throw new RuntimeException("Malformed @{$name} directive.");
+    }
+
+    /** @return string[] */
+    private static function splitTopLevel(string $expression): array
+    {
+        $parts = [];
+        $start = 0;
+        $stack = [];
+        $pairs = ['(' => ')', '[' => ']', '{' => '}'];
+        $quote = null;
+        $escaped = false;
+        for ($i = 0, $length = strlen($expression); $i < $length; $i++) {
+            $char = $expression[$i];
+            if ($quote !== null) {
+                if ($escaped) { $escaped = false; continue; }
+                if ($char === '\\') { $escaped = true; continue; }
+                if ($char === $quote) { $quote = null; }
+                continue;
+            }
+            if ($char === "'" || $char === '"') { $quote = $char; continue; }
+            if (isset($pairs[$char])) { $stack[] = $pairs[$char]; continue; }
+            if (in_array($char, [')', ']', '}'], true)) { array_pop($stack); continue; }
+            if ($char === ',' && $stack === []) {
+                $parts[] = trim(substr($expression, $start, $i - $start));
+                $start = $i + 1;
+            }
+        }
+        $parts[] = trim(substr($expression, $start));
+        return $parts;
+    }
+
+    public static function escape(mixed $value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    public static function classAttribute(mixed $value): string
+    {
+        $classes = [];
+        foreach ((array) $value as $key => $enabled) {
+            if (is_int($key) && $enabled) { $classes[] = (string) $enabled; }
+            elseif (!is_int($key) && $enabled) { $classes[] = (string) $key; }
+        }
+        $result = trim(implode(' ', $classes));
+        return $result === '' ? '' : ' class="' . self::escape($result) . '"';
+    }
+
+    public static function styleAttribute(mixed $value): string
+    {
+        $styles = [];
+        foreach ((array) $value as $key => $style) {
+            if (is_int($key) && (is_string($style) || is_numeric($style)) && trim((string) $style) !== '') {
+                $styles[] = rtrim((string) $style, ';');
+            } elseif (!is_int($key) && (is_string($style) || is_numeric($style)) && (string) $style !== '') {
+                $styles[] = rtrim((string) $key, ';') . ':' . $style;
+            } elseif (!is_int($key) && $style) {
+                $styles[] = rtrim((string) $key, ';');
+            }
+        }
+        $result = trim(implode('; ', $styles));
+        return $result === '' ? '' : ' style="' . self::escape(rtrim($result, '; ') . ';') . '"';
+    }
+
+    public static function valueAttribute(mixed $value): string { return 'value="' . self::escape($value) . '"'; }
+    public static function csrfField(): string { return '<input type="hidden" name="_token" value="' . self::escape(self::csrfToken()) . '" />'; }
+    public static function csrfToken(): string
+    {
+        return (function_exists('app') ? app(Security\Csrf::class) : new Security\Csrf())->token();
+    }
+
+    private static function viewsPath(): string { return self::$viewsPath ?? (defined('PAGES_PATH') ? PAGES_PATH : ROOT_PATH . '/app/pages'); }
+    private static function cachePath(): string { return self::$cachePath ?? (defined('VIEW_CACHE_PATH') ? VIEW_CACHE_PATH : ROOT_PATH . '/var/cache/views'); }
+    private static function componentsPath(): string
+    {
+        return self::$componentsPath ?? (defined('COMPONENTS_PATH') ? COMPONENTS_PATH : ROOT_PATH . '/app/components');
+    }
+    private static function cache(): ViewCache
+    {
+        return self::$cache ??= new ViewCache(self::cachePath(), defined('VIEW_CACHE_TRUST') && VIEW_CACHE_TRUST === true);
+    }
+
+    /** @return string[] */
+    private static function allMicroFiles(): array
+    {
+        $files = [];
+        foreach ([self::viewsPath(), self::componentsPath()] as $dir) {
+            if (!is_dir($dir)) { continue; }
+            $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS));
+            foreach ($iterator as $file) {
+                if ($file->isFile() && str_ends_with($file->getFilename(), '.micro.php')) { $files[] = $file->getPathname(); }
+            }
+        }
+        return $files;
+    }
+
+    private static function viewToFile(string $view): string
+    {
+        if ($view === '' || str_contains($view, "\0") || str_contains($view, '\\') || str_contains($view, '..')) {
+            throw new InvalidArgumentException('Invalid view name.');
+        }
+        return rtrim(self::viewsPath(), '/\\') . '/' . ltrim(str_replace('.', '/', $view), '/') . '.micro.php';
+    }
+
+    private static function isInsideTemplateRoots(string $file): bool
+    {
+        foreach ([self::viewsPath(), self::componentsPath()] as $root) {
+            $realRoot = realpath($root);
+            if ($realRoot === false) { continue; }
+            $realRoot = rtrim($realRoot, DIRECTORY_SEPARATOR);
+            if ($file === $realRoot || str_starts_with($file . DIRECTORY_SEPARATOR, $realRoot . DIRECTORY_SEPARATOR)) { return true; }
+        }
+        return false;
+    }
 }

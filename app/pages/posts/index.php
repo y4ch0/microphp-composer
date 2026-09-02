@@ -8,6 +8,7 @@
 
 use App\BlogRepository;
 use MicroPHP\Database;
+use MicroPHP\Http\Request;
 
 $meta['title'] = 'Lista postów';
 $posts = [];
@@ -20,10 +21,12 @@ try {
     $error = $e->getMessage();
 }
 
-if($_SERVER["REQUEST_METHOD"] == "POST") {
-    if(isset($_POST["title"]) && isset($_POST["content"]) && strlen($_POST["title"]) && strlen($_POST["content"])) {
+$title = $request->post('title');
+$postContent = $request->post('content');
+if ($request->isMethod('POST')) {
+    if (is_string($title) && is_string($postContent) && $title !== '' && $postContent !== '') {
         try {
-            $id = BlogRepository::createPost((string) $_POST["title"], (string) $_POST["content"]);
+            $id = BlogRepository::createPost($title, $postContent);
 
             if ($id === false) {
                 throw new Exception(Database::getInstance()->getError() ?? 'Unable to create post.');
@@ -42,6 +45,7 @@ if($_SERVER["REQUEST_METHOD"] == "POST") {
 <p>Poniższa lista postów została pobrana po stronie serwera (PHP). Komentarze są doładowywane dynamicznie (JavaScript) po kliknięciu przycisku.</p>
 
 <form action="/posts" method="post">
+    <input type="hidden" name="_token" value="<?= htmlspecialchars(\MicroPHP\View::csrfToken(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <h4>Tworzenie nowego postu</h4>
     <label>Tytuł<input type="text" name="title" required></label>
     <label>Treść<textarea name="content" placeholder="Lorem ipsum dolor..." required></textarea></label>

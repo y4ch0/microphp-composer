@@ -20,10 +20,7 @@ namespace MicroPHP;
 
 abstract class Component
 {
-  /** @var array<class-string,true> Components whose assets have already been queued for this request. */
-  private static array $registeredAssets = [];
-  private static array $styles = [];
-  private static array $scripts = [];
+  private ?AssetManager $assetManager = null;
 
   /** Override when the asset directory name cannot be inferred from the class name. */
   protected static ?string $assetName = null;
@@ -59,10 +56,11 @@ abstract class Component
    * @param array<string,mixed> $props Props passed to the component constructor.
    * @return string Rendered component markup.
    */
-  final public static function renderComponent(array $props = []): string
+  final public static function renderComponent(array $props = [], ?AssetManager $assets = null): string
   {
     $instance = static::make($props);
-    static::queueAssets();
+    $instance->assetManager = $assets;
+    $assets?->registerComponentDirectory(static::assetDirectory());
     return $instance->render();
   }
 
@@ -81,7 +79,16 @@ abstract class Component
       throw new \RuntimeException(static::class . ": template not found: {$file}");
     }
 
-    return View::renderFile($file, $data);
+    return (new View($this->assetManager))->renderTemplateFile($file, $data);
+  }
+
+  protected function component(string $name, array $props = []): string
+  {
+    $class = self::resolveClass($name);
+    if ($class === null) {
+      throw new \RuntimeException("Component class not found: {$name}");
+    }
+    return $class::renderComponent($props, $this->assetManager);
   }
 
   /**
@@ -114,24 +121,6 @@ abstract class Component
     return rtrim(self::componentAssetsPath(), '/\\') . '/' . static::assetName();
   }
 
-  /** Queues style.css and script.js for the component once per request. */
-  private static function queueAssets(): void
-  {
-    if (isset(self::$registeredAssets[static::class])) {
-      return;
-    }
-    self::$registeredAssets[static::class] = true;
-
-    $dir = static::assetDirectory();
-    $publicDir = rtrim(self::componentAssetsUrl(), '/') . '/' . static::assetName();
-
-    if (is_file($dir . '/style.css')) {
-      self::$styles[] = $publicDir . '/style.css';
-    }
-    if (is_file($dir . '/script.js')) {
-      self::$scripts[] = $publicDir . '/script.js';
-    }
-  }
 
   /**
    * Return the absolute root directory for component files.
@@ -176,18 +165,6 @@ abstract class Component
     $value = str_replace('_', '-', $value);
     $value = preg_replace('/(?<!^)[A-Z]/', '-$0', $value) ?? $value;
     return strtolower($value);
-  }
-
-  /** @return string[] Public URLs for all scoped stylesheets queued during this request. */
-  public static function styles(): array
-  {
-    return array_values(array_unique(self::$styles));
-  }
-
-  /** @return string[] Public URLs for all scoped scripts queued during this request. */
-  public static function scripts(): array
-  {
-    return array_values(array_unique(self::$scripts));
   }
 
   /**

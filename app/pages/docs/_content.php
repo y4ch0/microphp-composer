@@ -625,7 +625,7 @@ HTML
 </form>
 HTMLCODE)
             . <<<'HTML'
-    <p>The <code>@csrf</code> directive emits a hidden <code>_token</code> field using the current session token. Verification is explicit through <code>MicroPHP\Api::verifyCsrf()</code>.</p>
+    <p>The <code>@csrf</code> directive emits an escaped hidden <code>_token</code> field. Frontend middleware verifies it automatically for state-changing methods.</p>
 </section>
 
 <section>
@@ -918,25 +918,20 @@ HTML
 </form>
 HTMLCODE)
             . <<<'HTML'
-    <p>The token is generated at render time and stored in the session under MicroPHP's CSRF session key.</p>
+    <p>The token is generated with <code>random_bytes()</code>, reused for the session, and escaped at render time. Frontend middleware enforces it for POST, PUT, PATCH, and DELETE.</p>
 </section>
 
 <section>
-    <h2>Verify CSRF in a Page</h2>
+    <h2>Submit a Protected Page</h2>
 HTML
             . microphp_docs_code(<<<'PHP'
 <?php
 
-use MicroPHP\Api;
+use MicroPHP\Http\Request;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!Api::verifyCsrf()) {
-        http_response_code(419);
-        echo '<h1>Invalid CSRF token</h1>';
-        return;
-    }
-
-    // Continue with trusted form handling.
+if ($request->isMethod('POST')) {
+    $title = $request->post('title');
+    // The CSRF middleware has already validated _token or X-CSRF-Token.
 }
 
 ?>
@@ -945,24 +940,16 @@ PHP)
 </section>
 
 <section>
-    <h2>Verify CSRF in an API Handler</h2>
+    <h2>API CSRF</h2>
 HTML
             . microphp_docs_code(<<<'PHP'
 <?php
 
-use MicroPHP\Api;
-use MicroPHP\Http\Request;
-
-Api::post('/profile', function (Request $request): array {
-    if (!Api::verifyCsrf($request)) {
-        throw new Exception('Invalid CSRF token.');
-    }
-
-    return ['ok' => true];
-});
+// Bearer-token APIs do not use session CSRF by default.
+// Attach CsrfMiddleware explicitly when an API authenticates with cookies.
 PHP)
             . <<<'HTML'
-    <p><code>Api::verifyCsrf($request)</code> checks post data, <code>X-CSRF-TOKEN</code>, <code>X-Requested-With</code>, and JSON body field <code>_token</code>.</p>
+    <p>Tokens are accepted only from <code>_token</code> or <code>X-CSRF-Token</code>. <code>X-Requested-With</code> is not a CSRF token.</p>
 </section>
 HTML,
         ],
@@ -1122,7 +1109,7 @@ PHP)
 
 <section>
     <h2>Why Use These Objects</h2>
-    <p>Classic pages can still use <code>$_GET</code>, <code>$_POST</code>, <code>header()</code>, and <code>echo</code>. The HTTP objects are useful when you want code that is easier to unit test, reuse, and pass through middleware.</p>
+    <p>Classic pages remain plain PHP, but request data should come from the injected <code>Request</code> object and responses should use <code>Response</code>. This keeps behavior immutable, testable, and compatible with middleware and persistent workers.</p>
 </section>
 HTML,
         ],
@@ -1258,7 +1245,7 @@ PHP)
 
 <section>
     <h2>Guard Compatibility</h2>
-    <p><code>_guard.php</code> files still work. The default <code>both</code> mode runs guards first, then page middleware, so protected sections can migrate gradually.</p>
+    <p><code>_guard.php</code> files still work through a deprecated middleware adapter. Migrate their authorization callbacks to <code>_middleware.php</code>; there is one middleware execution pipeline.</p>
 </section>
 HTML,
         ],
@@ -1799,7 +1786,7 @@ APP_ENV=local
 APP_DEBUG=true
 TEXT)
             . <<<'HTML'
-    <p>When <code>APP_DEBUG=true</code>, uncaught exceptions are rendered with details. When it is false, users see a generic 500 response.</p>
+    <p>When <code>APP_DEBUG=true</code>, sanitized exception class and location diagnostics may be shown. Messages and traces remain in the log. If <code>.env</code> is absent, debug defaults to false and users receive a generic 500 response.</p>
 </section>
 
 <section>
@@ -1915,7 +1902,8 @@ HTML,
         <tbody>
             <tr><td><code>DB_DRIVER</code></td><td><code>sqlite</code>, <code>mysql</code>, <code>mariadb</code>, <code>pgsql</code>, <code>sqlsrv</code>, or <code>mongodb</code>. Aliases include <code>postgres</code>, <code>sqlserver</code>, <code>mssql</code>, and <code>mongo</code>.</td></tr>
             <tr><td><code>DB_DSN</code></td><td>Optional explicit PDO DSN or MongoDB URI. When set, it overrides generated connection strings.</td></tr>
-            <tr><td><code>DB_PATH</code></td><td>SQLite database file path.</td></tr>
+            <tr><td><code>DB_PATH</code></td><td>SQLite database file path. Relative paths resolve from <code>ROOT_PATH</code>.</td></tr>
+            <tr><td><code>DB_PERSISTENT</code></td><td>Enable persistent PDO connections deliberately. Defaults to <code>false</code>.</td></tr>
             <tr><td><code>DB_HOST</code></td><td>Host for MariaDB, MySQL, PostgreSQL, SQL Server, or MongoDB.</td></tr>
             <tr><td><code>DB_PORT</code></td><td>Optional port for generated network database connection strings.</td></tr>
             <tr><td><code>DB_NAME</code></td><td>SQL database name or MongoDB database name.</td></tr>
@@ -2005,21 +1993,21 @@ HTML,
         ],
         'testing' => [
             'title' => 'Testing',
-            'description' => 'Manual smoke tests, PHPUnit direction, database transaction tests, API testing, and view cache checks.',
+            'description' => 'PHPUnit, isolated database transactions, API testing, and view cache checks.',
             'content' => <<<'HTML'
 <section>
     <h1>Testing</h1>
-    <p>MicroPHP currently includes a manual smoke test and a development requirement for PHPUnit. The framework also includes Request, Response, Container, and QueryBuilder pieces that are designed to be tested without a real web request.</p>
+    <p><code>composer test</code> runs the canonical PHPUnit suite. It covers Request, Response, routing, middleware, APIs, templates, CSRF, assets, and database behavior without requiring a real web request.</p>
 </section>
 
 <section>
-    <h2>Manual Smoke Test</h2>
+    <h2>Optional Smoke Test</h2>
 HTML
             . microphp_docs_code(<<<'TEXT'
 php tests/manual-smoke-test.php
 TEXT)
             . <<<'HTML'
-    <p>The smoke test checks container autowiring, singleton behavior, request parsing, middleware wrapping and short-circuiting, query builder reads, inserts, updates, deletes, joins, and rollback behavior.</p>
+    <p>The historical smoke script remains an optional developer tool. Use <code>composer test</code> for acceptance and CI.</p>
 </section>
 
 <section>
@@ -2054,14 +2042,12 @@ PHP)
 
 <section>
     <h2>Database Tests</h2>
-    <p>Use transactions around tests that touch the real database. Roll them back in <code>finally</code> so test data does not leak into development data.</p>
+    <p>Automated tests create a temporary SQLite database and install it with <code>Database::usePdo()</code>. They never run against <code>database/library.db</code>. Use <code>Database::transaction()</code> for commit and rollback behavior.</p>
 HTML
             . microphp_docs_code(<<<'PHP'
 <?php
 
-\MicroPHP\Database::getInstance()->execute('BEGIN TRANSACTION');
-
-try {
+\MicroPHP\Database::transaction(function (): void {
     $id = \MicroPHP\Database::insert('posts', [
         'title' => 'Test',
         'content' => 'Body',
@@ -2069,16 +2055,14 @@ try {
     ]);
 
     assert(is_int($id));
-} finally {
-    \MicroPHP\Database::getInstance()->execute('ROLLBACK');
-}
+});
 PHP)
             . <<<'HTML'
 </section>
 
 <section>
-    <h2>PHPUnit Direction</h2>
-    <p>The project declares <code>phpunit/phpunit</code> in <code>require-dev</code>. A fuller test setup should add dedicated PHPUnit test cases, a test bootstrap that defines <code>ROOT_PATH</code> and loads <code>bootstrap/app.php</code>, and isolated fixtures for database-dependent tests.</p>
+    <h2>PHPUnit Suite</h2>
+    <p>The project uses PHPUnit 10.5 for PHP 8.1 compatibility. Dedicated unit and integration cases live under <code>tests/Unit</code> and <code>tests/Integration</code>, with shared setup in <code>tests/bootstrap.php</code>.</p>
 </section>
 
 <section>

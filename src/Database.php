@@ -21,7 +21,12 @@ class Database {
     /**
      * Create the configured database connection.
      */
-    private function __construct() {
+    private function __construct(?\PDO $pdo = null, ?DbDriver $driver = null) {
+        if ($pdo !== null) {
+            $this->pdo = $pdo;
+            $this->driver = $driver ?? DbDriver::Sqlite;
+            return;
+        }
         try {
             $this->driver = self::configuredDriver();
         } catch (ValueError) {
@@ -43,16 +48,24 @@ class Database {
         $dsn = $this->driver->buildDsn(
             host: self::configString('DB_HOST', 'localhost'),
             name: self::configString('DB_NAME', 'microphp'),
-            path: self::configString('DB_PATH', ROOT_PATH . '/database/storage.sqlite'),
+            path: $this->driver === DbDriver::Sqlite
+                ? self::resolveSqlitePath(self::configString('DB_PATH', 'database/storage.sqlite'))
+                : self::configString('DB_PATH'),
             port: self::configString('DB_PORT'),
             explicitDsn: self::configString('DB_DSN'),
         );
 
         $options = [
-            \PDO::ATTR_PERSISTENT => true,
+            \PDO::ATTR_PERSISTENT => self::configBool('DB_PERSISTENT', false),
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
         ];
+
+        // pdo_sqlsrv uses its own direct-query option and does not consistently
+        // support PDO::ATTR_EMULATE_PREPARES. Other supported PDO drivers do.
+        if ($this->driver !== DbDriver::SqlServer) {
+            $options[\PDO::ATTR_EMULATE_PREPARES] = false;
+        }
 
         if ($this->driver === DbDriver::SqlServer && defined('PDO::SQLSRV_ATTR_ENCODING') && defined('PDO::SQLSRV_ENCODING_UTF8')) {
             $options[constant('PDO::SQLSRV_ATTR_ENCODING')] = constant('PDO::SQLSRV_ENCODING_UTF8');
@@ -118,6 +131,27 @@ class Database {
             self::$instance = new self();
         }
         return self::$instance;
+    }
+
+    /** Install an isolated PDO connection, intended for application bootstraps and tests. */
+    public static function usePdo(\PDO $pdo, ?DbDriver $driver = null): self {
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        try {
+            $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+        } catch (PDOException) {
+            // Some PDO drivers do not expose this attribute after connection.
+        }
+        return self::$instance = new self($pdo, $driver ?? DbDriver::Sqlite);
+    }
+
+    public static function resolveSqlitePath(?string $path): string {
+        $path = trim((string) $path);
+        if ($path === '' || $path === ':memory:' || str_starts_with($path, 'file:')) {
+            return $path === '' ? ROOT_PATH . '/database/storage.sqlite' : $path;
+        }
+        $isAbsolute = str_starts_with($path, '/') || preg_match('/^[A-Za-z]:[\\\\\/]/', $path) === 1;
+        return $isAbsolute ? $path : rtrim(ROOT_PATH, '/\\') . DIRECTORY_SEPARATOR . $path;
     }
 
     public static function configuredDriver(): DbDriver {
@@ -284,6 +318,34 @@ class Database {
         return $value === null ? null : (string) $value;
     }
 
+    private static function configBool(string $constant, bool $default): bool {
+        if (!defined($constant)) {
+            return $default;
+        }
+        return filter_var(constant($constant), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    public static function transaction(callable $callback): mixed {
+        $pdo = self::getInstance()->pdoConnection('transactions');
+        if (!$pdo instanceof \PDO) {
+            throw new \LogicException('Transactions require a PDO database driver.');
+        }
+        if ($pdo->inTransaction()) {
+            throw new \LogicException('Nested transactions are not supported.');
+        }
+        $pdo->beginTransaction();
+        try {
+            $result = $callback();
+            $pdo->commit();
+            return $result;
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
     // -- Query builder entry points -------------------------------------------------
     //
     // These sit on top of query()/execute() and QueryBuilder; see
@@ -429,6 +491,26 @@ class Database {
         }
 
         return self::getInstance()->execute($sql, $where['params']);
+    }
+
+    public static function updateAll(string $table, array $data): int|false {
+        if ($data === []) {
+            return false;
+        }
+        QueryBuilder::assertIdentifier($table, 'Table name');
+        $set = [];
+        $params = [];
+        foreach ($data as $column => $value) {
+            QueryBuilder::assertSimpleIdentifier((string) $column, 'UPDATE column');
+            $set[] = "{$column} = :set_{$column}";
+            $params[':set_' . $column] = $value;
+        }
+        return self::getInstance()->execute("UPDATE {$table} SET " . implode(', ', $set), $params);
+    }
+
+    public static function deleteAll(string $table): int|false {
+        QueryBuilder::assertIdentifier($table, 'Table name');
+        return self::getInstance()->execute("DELETE FROM {$table}");
     }
 
 }

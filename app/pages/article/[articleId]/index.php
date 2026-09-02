@@ -7,20 +7,20 @@
 
 <?php
     // A standard primary button.
-    \MicroPHP\View::component('button', [
+    $view->renderComponent('button', [
         'text' => 'Learn More',
         'link' => '/about'
     ]);
 
     // A secondary button with a different type.
-    \MicroPHP\View::component('button', [
+    $view->renderComponent('button', [
         'text' => 'Contact Us',
         'link' => '/contact',
         'type' => 'secondary'
     ]);
 
     // A button with no props, using its defaults.
-    \MicroPHP\View::component('button');
+    $view->renderComponent('button');
     ?>
 
 <h2>Interactive Data Table Component</h2>
@@ -33,7 +33,7 @@ $userData = [
 ];
 
 // Render the component and pass the data and a custom button text as props.
-\MicroPHP\View::component('data-table', [
+$view->renderComponent('data-table', [
     'data' => $userData,
     'buttonText' => 'Show User List'
 ]);

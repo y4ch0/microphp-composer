@@ -14,7 +14,7 @@
         "php": ">=8.1"
     },
     "require-dev": {
-        "phpunit/phpunit": "^10.5 || ^11.0"
+        "phpunit/phpunit": "^10.5"
     },
     "autoload": {
         "psr-4": {
@@ -42,7 +42,8 @@
         "microphp:cache-warm": "@php bin/view-cache.php warm",
         "microphp:make-api": "@php bin/create-api.php",
         "microphp:make-component": "@php bin/create-component.php",
-        "test": "@php tests/manual-smoke-test.php"
+        "test": "@php vendor/bin/phpunit",
+        "test:smoke": "@php tests/manual-smoke-test.php"
     },
     "scripts-descriptions": {
         "microphp:setup": "Create or refresh the local .env file and runtime directories.",
@@ -50,7 +51,8 @@
         "microphp:cache-warm": "Compile all .micro.php views into the cache.",
         "microphp:make-api": "Generate filesystem API method files under app/api.",
         "microphp:make-component": "Generate a colocated component class, template, CSS, and JS files.",
-        "test": "Run the bundled MicroPHP smoke test suite."
+        "test": "Run the canonical PHPUnit suite.",
+        "test:smoke": "Run the optional legacy manual smoke checks."
     },
     "config": {
         "sort-packages": true

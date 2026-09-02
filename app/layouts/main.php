@@ -1,25 +1,16 @@
 <?php
 ob_start();
-\MicroPHP\View::component('header');
+$view->renderComponent('header');
 $header = ob_get_clean();
 
 ob_start();
-\MicroPHP\View::component('footer');
+$view->renderComponent('footer');
 $footer = ob_get_clean();
 
-foreach (\MicroPHP\Component::styles() as $componentCssPath) {
-    if (strpos($styles, 'href="' . $componentCssPath . '"') === false) {
-        $styles .= '<link rel="stylesheet" href="' . $componentCssPath . '">' . "\n    ";
-    }
-}
+$styles = $assets->stylesHtml();
+$scripts = $assets->scriptsHtml();
 
-foreach (\MicroPHP\Component::scripts() as $componentJsPath) {
-    if (strpos($scripts, 'src="' . $componentJsPath . '"') === false) {
-        $scripts .= '<script src="' . $componentJsPath . '" defer></script>' . "\n    ";
-    }
-}
-
-require_once("_root.php");
+require __DIR__ . "/_root.php";
 ?>
 <body>
 

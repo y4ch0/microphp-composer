@@ -23,9 +23,14 @@ final class MethodResolver
             return null;
         }
 
-        $file = rtrim($directory, '/\\') . DIRECTORY_SEPARATOR . $filename;
+        $base = realpath($directory);
+        $file = realpath(rtrim($directory, '/\\') . DIRECTORY_SEPARATOR . $filename);
+        if ($base === false || $file === false || !is_file($file)) {
+            return null;
+        }
+        $base = rtrim($base, DIRECTORY_SEPARATOR);
 
-        return is_file($file) ? $file : null;
+        return str_starts_with($file . DIRECTORY_SEPARATOR, $base . DIRECTORY_SEPARATOR) ? $file : null;
     }
 
     public function exists(string $directory, string $method): bool
@@ -39,7 +44,7 @@ final class MethodResolver
         $allowed = [];
 
         foreach (self::METHOD_FILES as $method => $filename) {
-            if (is_file(rtrim($directory, '/\\') . DIRECTORY_SEPARATOR . $filename)) {
+            if ($this->resolve($directory, $method) !== null) {
                 $allowed[] = $method;
             }
         }
@@ -61,7 +66,7 @@ final class MethodResolver
         $methods = [];
 
         foreach (self::METHOD_FILES as $method => $filename) {
-            if (is_file(rtrim($directory, '/\\') . DIRECTORY_SEPARATOR . $filename)) {
+            if ($this->resolve($directory, $method) !== null) {
                 $methods[] = $method;
             }
         }

@@ -204,7 +204,15 @@ class ViewCache
     {
         $real = realpath($file);
         $base = realpath($this->cachePath);
-        return $real !== false && $base !== false && strpos($real, $base) === 0;
+        if ($real === false || $base === false) {
+            return false;
+        }
+
+        $real = rtrim($real, DIRECTORY_SEPARATOR);
+        $base = rtrim($base, DIRECTORY_SEPARATOR);
+
+        return $real === $base
+            || str_starts_with($real . DIRECTORY_SEPARATOR, $base . DIRECTORY_SEPARATOR);
     }
 
     private function confine(string $cacheFile): string

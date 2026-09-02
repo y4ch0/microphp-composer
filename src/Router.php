@@ -8,9 +8,12 @@ namespace MicroPHP;
 
 use MicroPHP\Http\MiddlewareInterface;
 use MicroPHP\Http\MiddlewarePipeline;
+use MicroPHP\Http\Middleware\CsrfMiddleware;
+use MicroPHP\Http\Middleware\GuardMiddleware;
 use MicroPHP\Http\Request;
 use MicroPHP\Http\Response;
 use MicroPHP\Routing\RouteResolver;
+use MicroPHP\Routing\MiddlewareResolver;
 
 class Router
 {
@@ -18,11 +21,13 @@ class Router
     /** @var string[] */
     protected array $segments = [];
     protected Request $request;
+    private AssetManager $assets;
     /** @var array<int,MiddlewareInterface|callable> */
     protected array $middleware = [];
 
     public function __construct(?Request $request = null)
     {
+        $this->assets = new AssetManager();
         $this->setRequest($request ?? Request::fromGlobals());
     }
 
@@ -100,16 +105,30 @@ class Router
      */
     public function dispatch(?Request $request = null): Response
     {
+        if (defined('APP_DEBUG') && APP_DEBUG) {
+            @trigger_error('Router::dispatch() is deprecated; use PageDispatcher.', E_USER_DEPRECATED);
+        }
+        return (new PageDispatcher($this))->dispatch($request);
+    }
+
+    public function dispatchCanonical(?Request $request = null): Response
+    {
+        $this->assets = new AssetManager();
         if ($request !== null) {
             $this->setRequest($request);
         }
 
-        $pipeline = new MiddlewarePipeline($this->configuredMiddleware());
+        try {
+            $pipeline = new MiddlewarePipeline($this->configuredMiddleware());
 
-        return $pipeline->handle(
-            $this->request,
-            fn (Request $request): Response => $this->dispatchPage($request)
-        );
+            return $pipeline->handle(
+                $this->request,
+                fn (Request $request): Response => $this->dispatchPage($request)
+            );
+        } finally {
+            // Release all request-owned registrations even when dispatch throws.
+            $this->assets = new AssetManager();
+        }
     }
 
     private function dispatchPage(Request $request): Response
@@ -148,24 +167,14 @@ class Router
         $pageDir = $currentPath;
         $accessMode = $this->pageAccessMode();
 
+        $pageMiddleware = [];
         if ($accessMode === 'guard' || $accessMode === 'both') {
             foreach ($this->findInheritedGuards($pageDir)['guards'] as $guardConfig) {
-                $handler = $guardConfig['handler'];
-                $result = call_user_func($handler, $this, $pageRequest->routeParams());
-
-                if ($result instanceof Response) {
-                    return $result;
-                }
-
-                if ($result !== true) {
-                    return $this->forbiddenResponse();
-                }
+                $pageMiddleware[] = new GuardMiddleware($this, $guardConfig['handler']);
             }
         }
-
-        $pageMiddleware = [];
         if ($accessMode === 'middleware' || $accessMode === 'both') {
-            $pageMiddleware = $this->findInheritedMiddleware($pageDir)['middleware'];
+            $pageMiddleware = array_merge($pageMiddleware, $this->findInheritedMiddleware($pageDir)['middleware']);
         }
 
         $pipeline = new MiddlewarePipeline($pageMiddleware);
@@ -187,6 +196,7 @@ class Router
     private function configuredMiddleware(): array
     {
         return array_merge(
+            [new CsrfMiddleware(function_exists('app') ? app(\MicroPHP\Security\Csrf::class) : new \MicroPHP\Security\Csrf())],
             MiddlewarePipeline::normalize(
                 defined('FRONTEND_MIDDLEWARE') ? FRONTEND_MIDDLEWARE : [],
                 'FRONTEND_MIDDLEWARE'
@@ -242,53 +252,7 @@ class Router
      */
     private function findInheritedMiddleware(string $startDir): array
     {
-        $settings = ['middleware' => []];
-        $currentDir = $startDir;
-        $pagesRoot = realpath(self::pagesPath());
-
-        if ($pagesRoot === false) {
-            return $settings;
-        }
-
-        while (($realCurrent = realpath($currentDir)) !== false && $this->pathIsInside($realCurrent, $pagesRoot)) {
-            $middlewareFile = $currentDir . '/_middleware.php';
-            if (file_exists($middlewareFile)) {
-                $normalized = $this->normalizeMiddlewareConfig(include $middlewareFile, $middlewareFile);
-                if ($normalized['middleware'] !== []) {
-                    array_unshift($settings['middleware'], ...$normalized['middleware']);
-                }
-
-                if ($normalized['override'] === true) {
-                    break;
-                }
-            }
-
-            if ($realCurrent === $pagesRoot) {
-                break;
-            }
-
-            $currentDir = dirname($currentDir);
-        }
-
-        return $settings;
-    }
-
-    /**
-     * @return array{middleware: array<int,MiddlewareInterface|callable>, override: bool}
-     */
-    private function normalizeMiddlewareConfig(mixed $config, string $file): array
-    {
-        $override = false;
-
-        if (is_array($config) && array_key_exists('middleware', $config)) {
-            $override = (bool) ($config['override'] ?? false);
-            $config = $config['middleware'];
-        }
-
-        return [
-            'middleware' => MiddlewarePipeline::normalize($config, $file),
-            'override' => $override,
-        ];
+        return ['middleware' => (new MiddlewareResolver())->resolve(self::pagesPath(), $startDir)];
     }
 
     private function pageAccessMode(): string
@@ -310,6 +274,7 @@ class Router
         $meta = null;
         $layout = null;
         $params = $request->routeParams();
+        $view = new View($this->assets);
 
         $bufferLevel = ob_get_level();
         ob_start();
@@ -322,7 +287,7 @@ class Router
                 $template = str_replace(rtrim(self::pagesPath(), '/\\') . '/', '', $pageMicroFile);
                 $template = str_replace(['/', '.micro.php'], ['.', ''], $template);
 
-                $content = View::render($template, [
+                $content = $view->renderNamed($template, [
                     'params' => $params,
                     'request' => $request,
                     'meta' => $meta,
@@ -337,10 +302,9 @@ class Router
 
             $layout = $layout ?? 'main';
             $meta = array_merge($this->defaultMeta(), $meta ?? []);
-            $styles = $this->globalStyles();
-            $scripts = $this->globalScripts();
-            [$styles, $scripts] = $this->appendPageAssets($styles, $scripts, $assetPathSegments);
-            [$styles, $scripts] = $this->appendComponentAssets($styles, $scripts);
+            $this->registerGlobalAssets();
+            $this->registerPageAssets($assetPathSegments);
+            $assets = $this->assets;
 
             $layoutFile = rtrim(self::layoutsPath(), '/\\') . '/' . $layout . '.php';
             if (!file_exists($layoutFile)) {
@@ -350,8 +314,16 @@ class Router
                 return $this->notFoundResponse('Layout file not found: ' . htmlspecialchars($layout, ENT_QUOTES, 'UTF-8'));
             }
 
-            require $layoutFile;
-            $body = ob_get_clean();
+            while (ob_get_level() > $bufferLevel) {
+                ob_end_clean();
+            }
+            $body = (new LayoutRenderer())->render($layoutFile, [
+                'meta' => $meta,
+                'content' => $content,
+                'request' => $request,
+                'view' => $view,
+                'assets' => $assets,
+            ]);
         } catch (\Throwable $e) {
             while (ob_get_level() > $bufferLevel) {
                 ob_end_clean();
@@ -405,19 +377,24 @@ class Router
             'description' => $description,
             'icon' => rtrim(self::appAssetsUrl(), '/') . '/img/favicon.ico',
         ];
-        $styles = $this->globalStyles();
-        $scripts = $this->globalScripts();
-        [$styles, $scripts] = $this->appendComponentAssets($styles, $scripts);
+        $this->registerGlobalAssets();
+        $assets = $this->assets;
+        $view = new View($assets);
 
         $layoutFile = rtrim(self::layoutsPath(), '/\\') . '/main.php';
         if (!file_exists($layoutFile)) {
             return Response::html($content, $status);
         }
 
-        ob_start();
-        require $layoutFile;
+        $body = (new LayoutRenderer())->render($layoutFile, [
+            'meta' => $meta,
+            'content' => $content,
+            'request' => $this->request,
+            'view' => $view,
+            'assets' => $assets,
+        ]);
 
-        return Response::html(ob_get_clean(), $status);
+        return Response::html($body, $status);
     }
 
     /** @return array<string,string> */
@@ -430,71 +407,36 @@ class Router
         ];
     }
 
-    private function globalStyles(): string
+    private function registerGlobalAssets(): void
     {
-        $styles = '';
         $globalAssets = require ROOT_PATH . '/config/assets.php';
 
         foreach ($globalAssets['css'] as $cssPath) {
-            $styles .= '<link rel="stylesheet" href="' . $cssPath . '">' . "\n    ";
+            $this->assets->registerStyleUrl((string) $cssPath);
         }
-
-        $globalCssPath = rtrim(self::appAssetsUrl(), '/') . '/css/global.css';
         if (file_exists(rtrim(self::appAssetsPath(), '/\\') . '/css/global.css')) {
-            $styles .= '<link rel="stylesheet" href="' . $globalCssPath . '">' . "\n    ";
+            $this->assets->registerStyleFile(rtrim(self::appAssetsPath(), '/\\') . '/css/global.css');
         }
-
-        return $styles;
-    }
-
-    private function globalScripts(): string
-    {
-        $scripts = '';
-        $globalAssets = require ROOT_PATH . '/config/assets.php';
-
         foreach ($globalAssets['js'] as $jsPath) {
-            $scripts .= '<script src="' . $jsPath . '" defer></script>' . "\n    ";
+            $this->assets->registerScriptUrl((string) $jsPath);
         }
-
-        return $scripts;
     }
 
     /**
      * @param string[] $assetPathSegments
      * @return array{0: string, 1: string}
      */
-    private function appendPageAssets(string $styles, string $scripts, array $assetPathSegments): array
+    private function registerPageAssets(array $assetPathSegments): void
     {
-        $assetUrl = rtrim(self::pagesUrl(), '/') . '/' . implode('/', $assetPathSegments);
         $assetFilePath = rtrim(self::pagesPath(), '/\\') . '/' . implode('/', $assetPathSegments);
 
         if (file_exists($assetFilePath . '/style.css')) {
-            $styles .= '<link rel="stylesheet" href="' . $assetUrl . '/style.css">' . "\n    ";
+            $this->assets->registerStyleFile($assetFilePath . '/style.css');
         }
 
         if (file_exists($assetFilePath . '/script.js')) {
-            $scripts .= '<script src="' . $assetUrl . '/script.js" defer></script>' . "\n    ";
+            $this->assets->registerScriptFile($assetFilePath . '/script.js');
         }
-
-        return [$styles, $scripts];
-    }
-
-    /** @return array{0: string, 1: string} */
-    private function appendComponentAssets(string $styles, string $scripts): array
-    {
-        foreach (Component::styles() as $componentCssPath) {
-            if (strpos($styles, 'href="' . $componentCssPath . '"') === false) {
-                $styles .= '<link rel="stylesheet" href="' . $componentCssPath . '">' . "\n    ";
-            }
-        }
-
-        foreach (Component::scripts() as $componentJsPath) {
-            if (strpos($scripts, 'src="' . $componentJsPath . '"') === false) {
-                $scripts .= '<script src="' . $componentJsPath . '" defer></script>' . "\n    ";
-            }
-        }
-
-        return [$styles, $scripts];
     }
 
     private function pathIsInside(string $path, string $baseDir): bool

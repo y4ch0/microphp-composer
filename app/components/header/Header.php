@@ -3,7 +3,6 @@
 namespace MicroPHP\Components;
 
 use MicroPHP\Component;
-use MicroPHP\View;
 
 class Header extends Component
 {
@@ -30,7 +29,7 @@ class Header extends Component
                 <li><a href="/library">Library</a></li>
                 <li><a href="/about">About</a></li>
             </ul>
-            <?php View::component('theme-change'); ?>
+            <?php echo $this->component('theme-change'); ?>
             <button role="menu"></button>
         </nav>
     </div>

@@ -12,10 +12,12 @@ use Closure;
 use InvalidArgumentException;
 use MicroPHP\Http\MiddlewareInterface;
 use MicroPHP\Http\Middleware\CorsMiddleware;
+use MicroPHP\Http\HttpException;
 use MicroPHP\Http\MiddlewarePipeline;
 use MicroPHP\Http\Request;
 use MicroPHP\Http\Response;
 use MicroPHP\Routing\MethodResolver;
+use MicroPHP\Routing\MiddlewareResolver;
 use MicroPHP\Routing\RouteResolver;
 use ReflectionFunction;
 use ReflectionNamedType;
@@ -144,6 +146,9 @@ class Api
         array $corsConfig,
         mixed $middleware = []
     ): void {
+        if (defined('APP_DEBUG') && APP_DEBUG) {
+            @trigger_error('Static Api route registration is deprecated; use filesystem method handlers.', E_USER_DEPRECATED);
+        }
         $path = '/' . trim($path, '/');
 
         self::$routes[] = [
@@ -163,7 +168,14 @@ class Api
 
     public function dispatch(?Request $request = null): Response
     {
-        $request ??= Request::fromGlobals();
+        if (defined('APP_DEBUG') && APP_DEBUG) {
+            @trigger_error('Api::dispatch() is deprecated; use ApiDispatcher.', E_USER_DEPRECATED);
+        }
+        return (new ApiDispatcher($this))->dispatch($request);
+    }
+
+    public function dispatchCanonical(Request $request): Response
+    {
         $segments = $request->segments();
         $version = (($segments[0] ?? null) === 'api') ? ($segments[1] ?? null) : null;
 
@@ -172,19 +184,22 @@ class Api
                 $request,
                 self::$defaultCorsConfig,
                 $this->collectMiddleware(null),
-                fn (Request $request): Response => Response::json(['error' => 'API version is not specified.'], 400)
+                fn (Request $request): Response => Response::error('API version is not specified.', 400, 'API_VERSION_REQUIRED')
             );
         }
 
-        $basePath = rtrim(self::routesPath(), '/\\') . '/' . $version;
-        if (!is_dir($basePath)) {
+        $versionMatch = $this->routeResolver()->resolveStaticChild(self::routesPath(), $version);
+        if ($versionMatch === null) {
             return $this->throughMiddleware(
                 $request,
                 self::$defaultCorsConfig,
                 $this->collectMiddleware(null),
-                fn (Request $request): Response => Response::json(['error' => "API version '{$version}' not found."], 404)
+                fn (Request $request): Response => Response::error('API version not found.', 404, 'API_VERSION_NOT_FOUND')
             );
         }
+
+        $basePath = $versionMatch->directory;
+        $version = $versionMatch->segments[0];
 
         $resourcePath = '/' . implode('/', array_slice($segments, 2));
         $filesystemResponse = $this->dispatchFilesystemRoute($request, $basePath, $resourcePath, $version);
@@ -194,7 +209,7 @@ class Api
 
         self::loadRoutes($basePath);
 
-        return $this->dispatchLegacyRoute($request, $resourcePath, $version);
+        return $this->dispatchLegacyRoute($request, $resourcePath, $basePath);
     }
 
     /**
@@ -293,22 +308,16 @@ class Api
 
     private function handleFilesystemHandler(string $handlerFile, Request $request): Response
     {
-        try {
-            $handler = require $handlerFile;
+        $handler = require $handlerFile;
 
-            if (!is_callable($handler)) {
-                throw new RuntimeException('API handler must return a callable.');
-            }
-
-            return $this->invokeHandler($handler, $request);
-        } catch (InvalidArgumentException $e) {
-            return Response::json(['error' => $e->getMessage()], 400);
-        } catch (Throwable $e) {
-            return Response::json(['error' => $e->getMessage()], 500);
+        if (!is_callable($handler)) {
+            throw new RuntimeException('API handler must return a callable.');
         }
+
+        return $this->invokeHandler($handler, $request);
     }
 
-    private function dispatchLegacyRoute(Request $request, string $resourcePath, string $version): Response
+    private function dispatchLegacyRoute(Request $request, string $resourcePath, string $versionDirectory): Response
     {
         $path = '/' . trim($resourcePath, '/');
         $method = $request->method();
@@ -320,7 +329,7 @@ class Api
             return $this->throughMiddleware(
                 $routeRequest,
                 $legacyInfo['cors'],
-                $this->collectMiddleware($version),
+                $this->collectMiddleware($versionDirectory),
                 fn (Request $request): Response => $this->automaticOptionsResponse($legacyInfo['methods'])
             );
         }
@@ -340,7 +349,7 @@ class Api
         return $this->throughMiddleware(
             $routeRequest,
             $routeCors,
-            $this->collectMiddleware($version, $routeMiddleware),
+            $this->collectMiddleware($versionDirectory, $routeMiddleware),
             function (Request $request) use ($matchedRoute, $legacyInfo, $headFallback): Response {
                 if ($matchedRoute) {
                     $response = $this->handleRoute($matchedRoute, $request);
@@ -352,7 +361,7 @@ class Api
                     return $this->methodNotAllowedResponse($legacyInfo['methods']);
                 }
 
-                return Response::json(['error' => 'Endpoint not found.'], 404);
+                return Response::error('Endpoint not found.', 404, 'ENDPOINT_NOT_FOUND');
             }
         );
     }
@@ -360,16 +369,10 @@ class Api
     /** @param array<string,mixed> $route */
     private function handleRoute(array $route, Request $request): Response
     {
-        try {
-            $data = $this->requestData($request);
-            $result = self::invokeRouteCallback($route['callback'], $request, $data);
+        $data = $this->requestData($request);
+        $result = self::invokeRouteCallback($route['callback'], $request, $data);
 
-            return $this->normalizeRouteResponse($result, $request->method());
-        } catch (InvalidArgumentException $e) {
-            return Response::json(['error' => $e->getMessage()], 400);
-        } catch (Throwable $e) {
-            return Response::json(['error' => $e->getMessage()], 500);
-        }
+        return $this->normalizeRouteResponse($result, $request->method());
     }
 
     /**
@@ -394,14 +397,14 @@ class Api
      * @return array<int,MiddlewareInterface|callable>
      */
     private function collectMiddleware(
-        ?string $version,
+        ?string $versionDirectory,
         array $routeMiddleware = [],
         ?string $basePath = null,
         ?string $routeDirectory = null
     ): array {
         $fileMiddleware = $basePath !== null && $routeDirectory !== null
             ? $this->inheritedFileMiddleware($basePath, $routeDirectory)
-            : $this->fileMiddleware($version);
+            : $this->fileMiddleware($versionDirectory);
 
         return array_merge(
             MiddlewarePipeline::normalize(defined('API_MIDDLEWARE') ? API_MIDDLEWARE : [], 'API_MIDDLEWARE'),
@@ -412,86 +415,19 @@ class Api
     }
 
     /** @return array<int,MiddlewareInterface|callable> */
-    private function fileMiddleware(?string $version): array
+    private function fileMiddleware(?string $versionDirectory): array
     {
-        $middleware = [];
-        $files = [rtrim(self::routesPath(), '/\\') . '/_middleware.php'];
-
-        if ($version !== null) {
-            $files[] = rtrim(self::routesPath(), '/\\') . '/' . $version . '/_middleware.php';
+        $root = realpath(self::routesPath());
+        if ($root === false) {
+            return [];
         }
-
-        foreach ($files as $file) {
-            if (!file_exists($file)) {
-                continue;
-            }
-
-            $normalized = $this->normalizeMiddlewareConfig(include $file, $file);
-            if ($normalized['override']) {
-                $middleware = [];
-            }
-            $middleware = array_merge($middleware, $normalized['middleware']);
-        }
-
-        return $middleware;
+        return (new MiddlewareResolver())->resolve($root, $versionDirectory ?? $root);
     }
 
     /** @return array<int,MiddlewareInterface|callable> */
     private function inheritedFileMiddleware(string $basePath, string $routeDirectory): array
     {
-        $basePath = realpath($basePath);
-        $routeDirectory = realpath($routeDirectory);
-        if ($basePath === false || $routeDirectory === false || !$this->pathIsInside($routeDirectory, $basePath)) {
-            return [];
-        }
-
-        $directories = [];
-        $current = $routeDirectory;
-        while ($this->pathIsInside($current, $basePath)) {
-            array_unshift($directories, $current);
-            if ($current === $basePath) {
-                break;
-            }
-            $current = dirname($current);
-        }
-
-        $files = [rtrim(self::routesPath(), '/\\') . '/_middleware.php'];
-        foreach ($directories as $directory) {
-            $files[] = $directory . DIRECTORY_SEPARATOR . '_middleware.php';
-        }
-
-        $middleware = [];
-        foreach ($files as $file) {
-            if (!is_file($file)) {
-                continue;
-            }
-
-            $normalized = $this->normalizeMiddlewareConfig(include $file, $file);
-            if ($normalized['override']) {
-                $middleware = [];
-            }
-            $middleware = array_merge($middleware, $normalized['middleware']);
-        }
-
-        return $middleware;
-    }
-
-    /**
-     * @return array{middleware: array<int,MiddlewareInterface|callable>, override: bool}
-     */
-    private function normalizeMiddlewareConfig(mixed $config, string $file): array
-    {
-        $override = false;
-
-        if (is_array($config) && array_key_exists('middleware', $config)) {
-            $override = (bool) ($config['override'] ?? false);
-            $config = $config['middleware'];
-        }
-
-        return [
-            'middleware' => MiddlewarePipeline::normalize($config, $file),
-            'override' => $override,
-        ];
+        return (new MiddlewareResolver())->resolve(self::routesPath(), $routeDirectory);
     }
 
     private function requestData(Request $request): ?array
@@ -511,7 +447,7 @@ class Api
 
         $data = $request->json();
         if ($data === null) {
-            throw new InvalidArgumentException('Invalid JSON format.');
+            throw new HttpException(400, 'INVALID_JSON', 'Invalid JSON format.');
         }
 
         return $data;
@@ -618,19 +554,23 @@ class Api
      */
     private static function loadRoutes(string $dir): void
     {
-        $realDir = realpath($dir) ?: $dir;
+        $realDir = realpath($dir);
+        if ($realDir === false || !is_dir($realDir)) {
+            return;
+        }
         if (isset(self::$loadedRouteDirectories[$realDir])) {
             return;
         }
 
         $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+            new \RecursiveDirectoryIterator($realDir, \FilesystemIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::SELF_FIRST
         );
 
         foreach ($iterator as $item) {
             if (
                 $item->isFile()
+                && self::pathIsInsideStatic($item->getPathname(), $realDir)
                 && $item->getExtension() === 'php'
                 && $item->getFilename() !== '_middleware.php'
                 && !preg_match('/^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)\.php$/', $item->getFilename())
@@ -640,6 +580,21 @@ class Api
         }
 
         self::$loadedRouteDirectories[$realDir] = true;
+    }
+
+    private static function pathIsInsideStatic(string $path, string $baseDir): bool
+    {
+        $realPath = realpath($path);
+        $realBase = realpath($baseDir);
+        if ($realPath === false || $realBase === false) {
+            return false;
+        }
+
+        $realPath = rtrim($realPath, DIRECTORY_SEPARATOR);
+        $realBase = rtrim($realBase, DIRECTORY_SEPARATOR);
+
+        return $realPath === $realBase
+            || str_starts_with($realPath . DIRECTORY_SEPARATOR, $realBase . DIRECTORY_SEPARATOR);
     }
 
     /**
@@ -760,7 +715,7 @@ class Api
     /** @param string[] $allowedMethods */
     private function methodNotAllowedResponse(array $allowedMethods): Response
     {
-        return Response::json(['error' => 'Method Not Allowed'], 405)
+        return Response::error('Method Not Allowed', 405, 'METHOD_NOT_ALLOWED')
             ->withHeader('Allow', implode(', ', $allowedMethods));
     }
 
@@ -784,8 +739,8 @@ class Api
     {
         $payload = self::responsePayload($response);
 
-        if (is_array($payload) && isset($payload['error'])) {
-            return (string) $payload['error'];
+        if (is_array($payload) && isset($payload['error']['message']) && is_string($payload['error']['message'])) {
+            return $payload['error']['message'];
         }
 
         return 'API request failed with status ' . $response->status() . '.';
@@ -817,27 +772,12 @@ class Api
             || str_starts_with($realPath . DIRECTORY_SEPARATOR, $realBaseDir . DIRECTORY_SEPARATOR);
     }
 
-    /**
-     * Verify the CSRF token present in the request.
-     */
+    /** @deprecated Attach CsrfMiddleware to cookie-authenticated APIs. */
     public static function verifyCsrf(?Request $request = null): bool
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            @session_start();
-        }
-
-        $sessionKey = '_microphp_csrf_token';
-        $stored = $_SESSION[$sessionKey] ?? null;
-        if (!$stored) {
-            return false;
-        }
-
         $request ??= Request::fromGlobals();
-        $token = $request->post('_token')
-            ?? $request->header('X-CSRF-TOKEN')
-            ?? $request->header('X-Requested-With')
-            ?? ($request->json()['_token'] ?? null);
-
-        return is_string($token) && hash_equals($stored, $token);
+        $postToken = $request->post('_token');
+        $token = is_string($postToken) ? $postToken : $request->header('X-CSRF-Token');
+        return (function_exists('app') ? app(\MicroPHP\Security\Csrf::class) : new \MicroPHP\Security\Csrf())->validate($token);
     }
 }

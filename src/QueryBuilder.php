@@ -199,6 +199,16 @@ final class QueryBuilder
         return (int) ($result[0]['aggregate'] ?? 0);
     }
 
+    public function updateAll(array $data): int|false
+    {
+        return Database::updateAll($this->table, $data);
+    }
+
+    public function deleteAll(): int|false
+    {
+        return Database::deleteAll($this->table);
+    }
+
     /**
      * Compile the SELECT statement without executing it.
      *

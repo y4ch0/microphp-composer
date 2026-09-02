@@ -7,26 +7,17 @@ $links = [
 ];
 
 ob_start();
-\MicroPHP\View::component('header');
+$view->renderComponent('header');
 $header = ob_get_clean();
 
 ob_start();
-\MicroPHP\View::component('footer');
+$view->renderComponent('footer');
 $footer = ob_get_clean();
 
-foreach (\MicroPHP\Component::styles() as $componentCssPath) {
-    if (strpos($styles, 'href="' . $componentCssPath . '"') === false) {
-        $styles .= '<link rel="stylesheet" href="' . $componentCssPath . '">' . "\n    ";
-    }
-}
+$styles = $assets->stylesHtml();
+$scripts = $assets->scriptsHtml();
 
-foreach (\MicroPHP\Component::scripts() as $componentJsPath) {
-    if (strpos($scripts, 'src="' . $componentJsPath . '"') === false) {
-        $scripts .= '<script src="' . $componentJsPath . '" defer></script>' . "\n    ";
-    }
-}
-
-require_once("_root.php");
+require __DIR__ . "/_root.php";
 ?>
 <body>
 
@@ -39,7 +30,7 @@ require_once("_root.php");
                 <nav>
                     <ul>
                         <?php foreach($links as $link => $label): ?>
-                        <li <?php if($link == current_path()) {echo "aria-current='true'";} ?>><a href="<?php echo $link ?>"><?php echo $label ?></a>
+                        <li <?php if($link === '/' . $request->path()) {echo "aria-current='true'";} ?>><a href="<?php echo $link ?>"><?php echo $label ?></a>
                         <?php endforeach; ?>
                     </ul>
                 </nav>

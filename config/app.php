@@ -9,8 +9,8 @@ $env = is_file($envFile) ? (parse_ini_file($envFile) ?: []) : [];
 // Environment settings.
 // APP_ENV/APP_DEBUG gate error display (see ExceptionHandler) — keep
 // APP_DEBUG off outside local development.
-define('APP_ENV', $env['APP_ENV'] ?? 'local');
-define('APP_DEBUG', filter_var($env['APP_DEBUG'] ?? (APP_ENV === 'local'), FILTER_VALIDATE_BOOLEAN));
+define('APP_ENV', $env['APP_ENV'] ?? 'production');
+define('APP_DEBUG', filter_var($env['APP_DEBUG'] ?? false, FILTER_VALIDATE_BOOLEAN));
 
 // Database settings.
 define('DB_DRIVER', $env['DB_DRIVER'] ?? 'sqlite');
@@ -29,6 +29,7 @@ define('DB_NAME', $env['DB_NAME'] ?? 'microphp');
 define('DB_USER', $env['DB_USER'] ?? null);
 define('DB_PASS', $env['DB_PASS'] ?? null);
 define('DB_AUTH_SOURCE', $env['DB_AUTH_SOURCE'] ?? null);
+define('DB_PERSISTENT', filter_var($env['DB_PERSISTENT'] ?? false, FILTER_VALIDATE_BOOLEAN));
 
 // Application settings.
 define('API_SERVICE_ENABLED', filter_var($env['API_SERVICE_ENABLED'] ?? true, FILTER_VALIDATE_BOOLEAN));

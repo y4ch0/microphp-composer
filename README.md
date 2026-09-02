@@ -45,6 +45,72 @@ php -S localhost:8000 -t public public/index.php
 The root `index.php` remains as a shared-hosting convenience entry point, but
 production servers should point their document root to `public/`.
 
+MicroPHP supports PHP 8.1 and newer. CI exercises PHP 8.1–8.4. If `.env` is
+missing, `APP_ENV=production` and `APP_DEBUG=false` are assumed; the interactive
+setup command explicitly creates development settings.
+
+## HTTP and Filesystem Routing
+
+`Request` exposes `method()`, `path()`, `query()`, `post()`, `json()`,
+`cookie()`/`cookies()`, `file()`/`files()`, `header()`, and
+`route()`/`routeParams()`. Route parameters are separate from submitted input;
+`input()` checks POST, query, then JSON. `legacyInput()` retains the former route
+parameter precedence during migration.
+
+Pages remain simple `app/pages/**/index.php` or `index.micro.php` files. API
+versions are static directories under `app/api`; resources beneath them may use
+`[parameter]` directories and method files such as `GET.php` and `POST.php`.
+Static directories win over dynamic ones, ambiguous dynamic siblings are a
+configuration error, and resolved paths cannot escape their configured roots.
+
+API method files return `Response` objects. Unsupported methods receive 405
+with an accurate `Allow` header. HEAD uses an explicit handler or falls back to
+GET without a body; OPTIONS may be explicit or generated automatically.
+
+## Middleware, CSRF, and Errors
+
+`_middleware.php` is inherited from root to leaf for pages and API resources.
+Legacy `_guard.php` files are adapted into that middleware pipeline; migrate
+their authorization callback to `_middleware.php`. Browser POST, PUT, PATCH,
+and DELETE requests pass through CSRF middleware and must provide `_token` or
+`X-CSRF-Token`. Bearer-token APIs do not receive session CSRF automatically.
+
+Unexpected errors are logged with exception context. Production APIs receive a
+stable JSON error object and frontend requests receive safe HTML; neither leaks
+the original exception. Use `Response::error($message, $status, $code)` for
+deliberate client-facing errors.
+
+## Views, Assets, and Workers
+
+`{{ ... }}` is escaped and `{!! ... !!}` is explicitly raw. Generated class,
+style, value, CSRF, and metadata attributes use quote-safe UTF-8 escaping.
+Template names and files are confined to configured page/component roots;
+`renderTrustedFile()` is the explicit escape hatch for trusted application
+files.
+
+Every frontend dispatch owns a fresh `AssetManager`. Page, layout, application,
+and component assets are deduplicated in deterministic order and translated
+only from known filesystem roots, so component assets cannot leak between
+persistent-worker requests.
+
+## Database Safety
+
+PDO uses exception mode, associative fetches, native prepares, and
+non-persistent connections by default (`DB_PERSISTENT=false`). Relative SQLite
+paths resolve beneath `ROOT_PATH`. `Database::transaction()` commits on success,
+rolls back and rethrows on failure, and explicitly rejects nesting. Ordinary
+update/delete calls require conditions; intentional full-table operations are
+`Database::table('users')->updateAll(...)` and `deleteAll()`.
+
+Tests create isolated temporary SQLite databases; they never write to the demo
+`database/library.db`.
+
+## Compatibility
+
+`Router::dispatch()` and static `Api::get()`-style registration remain as
+development-deprecated facades. New code should enter through `Application`,
+`PageDispatcher`, filesystem API method files, and middleware.
+
 ## Common Commands
 
 ```bash

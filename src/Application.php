@@ -18,16 +18,29 @@ final class Application
 
     public function handle(Request $request): Response
     {
-        $assetResponse = $this->assetResponse($request);
-        if ($assetResponse !== null) {
-            return $assetResponse;
-        }
+        try {
+            $assetResponse = $this->assetResponse($request);
+            if ($assetResponse !== null) {
+                return $this->finalize($request, $assetResponse);
+            }
 
-        if ($this->isApiRequest($request) && defined('API_SERVICE_ENABLED') && API_SERVICE_ENABLED === true) {
-            return ($this->api ?? new Api($this->container))->dispatch($request);
-        }
+            if ($this->isApiRequest($request) && defined('API_SERVICE_ENABLED') && API_SERVICE_ENABLED === true) {
+                return $this->finalize($request, (new ApiDispatcher($this->api ?? new Api($this->container)))->dispatch($request));
+            }
 
-        return ($this->router ?? new Router($request))->dispatch($request);
+            return $this->finalize($request, (new PageDispatcher($this->router ?? new Router($request)))->dispatch($request));
+        } catch (\Throwable $e) {
+            $response = (new ExceptionHandler(
+                $this->container->make(Logger::class),
+                defined('APP_DEBUG') && APP_DEBUG === true
+            ))->render($e, $request);
+            return $this->finalize($request, $response);
+        }
+    }
+
+    private function finalize(Request $request, Response $response): Response
+    {
+        return $request->method() === 'HEAD' ? $response->withoutBody() : $response;
     }
 
     private function isApiRequest(Request $request): bool

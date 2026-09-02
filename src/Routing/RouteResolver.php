@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace MicroPHP\Routing;
 
-use RuntimeException;
-
 final class RouteResolver
 {
     /**
@@ -39,14 +37,14 @@ final class RouteResolver
                 return null;
             }
 
-            $directories = $this->childDirectories($currentPath);
+            $directories = $this->childDirectories($rootPath, $currentPath);
+            $dynamic = $this->dynamicDirectory($directories, $currentPath);
             if (isset($directories[$segment])) {
                 $currentPath = $directories[$segment];
                 $matchedSegments[] = $segment;
                 continue;
             }
 
-            $dynamic = $this->firstDynamicDirectory($directories);
             if ($dynamic === null) {
                 return null;
             }
@@ -57,9 +55,31 @@ final class RouteResolver
             $matchedSegments[] = $directoryName;
         }
 
-        $this->ensureInsideRoot($rootPath, $currentPath);
-
         return new RouteMatch($currentPath, $params, $matchedSegments);
+    }
+
+    /**
+     * Resolve exactly one static child directory. Dynamic directories are never
+     * considered, making this suitable for trust boundaries such as API versions.
+     */
+    public function resolveStaticChild(string $root, string $segment): ?RouteMatch
+    {
+        $rootPath = realpath($root);
+        if ($rootPath === false || !is_dir($rootPath)) {
+            return null;
+        }
+
+        $normalized = $this->normalizeSegment($segment);
+        if ($normalized === null) {
+            return null;
+        }
+
+        $directories = $this->childDirectories($rootPath, $rootPath);
+        if (!isset($directories[$normalized])) {
+            return null;
+        }
+
+        return new RouteMatch($directories[$normalized], [], [$normalized]);
     }
 
     /** @return string[]|null */
@@ -85,12 +105,17 @@ final class RouteResolver
         }
 
         $decoded = $segment;
-        for ($i = 0; $i < 3; $i++) {
+        for ($i = 0; $i < 16; $i++) {
             $next = rawurldecode($decoded);
             if ($next === $decoded) {
                 break;
             }
             $decoded = $next;
+        }
+
+        // Fail closed when an excessively encoded value did not stabilize.
+        if (rawurldecode($decoded) !== $decoded) {
+            return null;
         }
 
         if (
@@ -108,7 +133,7 @@ final class RouteResolver
     }
 
     /** @return array<string,string> Directory name => real path. */
-    private function childDirectories(string $directory): array
+    private function childDirectories(string $root, string $directory): array
     {
         $entries = scandir($directory);
         if ($entries === false) {
@@ -123,7 +148,7 @@ final class RouteResolver
 
             $path = $directory . DIRECTORY_SEPARATOR . $entry;
             $realPath = realpath($path);
-            if ($realPath !== false && is_dir($realPath)) {
+            if ($realPath !== false && is_dir($realPath) && $this->isInsideRoot($root, $realPath)) {
                 $directories[$entry] = $realPath;
             }
         }
@@ -135,29 +160,32 @@ final class RouteResolver
      * @param array<string,string> $directories
      * @return array{0:string,1:string,2:string}|null Parameter name, directory name, directory path.
      */
-    private function firstDynamicDirectory(array $directories): ?array
+    private function dynamicDirectory(array $directories, string $directory): ?array
     {
+        $matches = [];
         foreach ($directories as $directoryName => $directoryPath) {
             $directoryName = (string) $directoryName;
-            if (preg_match('/^\[([A-Za-z_][A-Za-z0-9_]*)\]$/', $directoryName, $matches)) {
-                return [$matches[1], $directoryName, $directoryPath];
+            if (preg_match('/^\[([A-Za-z_][A-Za-z0-9_]*)\]$/', $directoryName, $nameMatch)) {
+                $matches[] = [$nameMatch[1], $directoryName, $directoryPath];
             }
         }
 
-        return null;
+        if (count($matches) > 1) {
+            throw new RoutingConfigurationException("Ambiguous dynamic route directories beneath {$directory}.");
+        }
+
+        return $matches[0] ?? null;
     }
 
-    private function ensureInsideRoot(string $root, string $resolved): void
+    private function isInsideRoot(string $root, string $resolved): bool
     {
         $root = rtrim($root, DIRECTORY_SEPARATOR);
         $resolved = rtrim($resolved, DIRECTORY_SEPARATOR);
 
         if ($resolved === $root) {
-            return;
+            return true;
         }
 
-        if (!str_starts_with($resolved . DIRECTORY_SEPARATOR, $root . DIRECTORY_SEPARATOR)) {
-            throw new RuntimeException('Invalid route path.');
-        }
+        return str_starts_with($resolved . DIRECTORY_SEPARATOR, $root . DIRECTORY_SEPARATOR);
     }
 }

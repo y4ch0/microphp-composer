@@ -1,10 +1,15 @@
 <?php
-if(!isset($_SESSION)) {
-    session_start();
+
+use MicroPHP\View;
+
+if ($request->isMethod('POST')) {
+    unset($_SESSION['user']);
+    session_regenerate_id(true);
+    echo 'User destroyed';
+    return;
 }
-
-$_SESSION = null;
-
-session_destroy();
-
-echo "User destroyed";
+?>
+<form method="post" action="/user/destroy">
+    <input type="hidden" name="_token" value="<?= htmlspecialchars(View::csrfToken(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
+    <button type="submit">Destroy demo user</button>
+</form>

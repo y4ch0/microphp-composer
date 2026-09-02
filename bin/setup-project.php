@@ -145,6 +145,7 @@ function defaultEnvironment(string $rootPath): array
         'DB_USER' => '',
         'DB_PASS' => '',
         'DB_AUTH_SOURCE' => '',
+        'DB_PERSISTENT' => 'false',
         'VIEW_CACHE_TRUST' => 'false',
     ];
 }
@@ -356,6 +357,7 @@ function writeEnvironmentFile(string $envPath, array $values): void
         'DB_USER=' . envValue($values['DB_USER']),
         'DB_PASS=' . envValue($values['DB_PASS']),
         'DB_AUTH_SOURCE=' . envValue($values['DB_AUTH_SOURCE']),
+        'DB_PERSISTENT=' . envValue($values['DB_PERSISTENT']),
         '',
         'VIEW_CACHE_TRUST=' . envValue($values['VIEW_CACHE_TRUST']),
         '',
