@@ -5,6 +5,9 @@ declare(strict_types=1);
 use MicroPHP\Http\Request;
 
 error_reporting(E_ALL);
+// Fail closed until application configuration has been loaded successfully.
+ini_set('display_errors', '0');
+ini_set('display_startup_errors', '0');
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 

@@ -31,7 +31,7 @@ function route_param($name, $default = null, ?Request $request = null) {
  * @return string The current path.
  */
 function current_path() {
-    return parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    return parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
 }
 
 /**
@@ -40,9 +40,17 @@ function current_path() {
  * @return string The full current URL.
  */
 function current_url() {
-    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
-    $host = $_SERVER['HTTP_HOST'];
-    return $protocol . "://" . $host . $_SERVER['REQUEST_URI'];
+    if (!defined('APP_URL')) {
+        throw new RuntimeException('APP_URL must be configured before generating absolute URLs.');
+    }
+
+    $baseUrl = rtrim((string) APP_URL, '/');
+    $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+    if (preg_match('/[\x00-\x1F\x7F]/', $requestUri) === 1) {
+        throw new RuntimeException('The request URI contains invalid control characters.');
+    }
+
+    return $baseUrl . '/' . ltrim($requestUri, '/');
 }
 
 /**
@@ -117,7 +125,7 @@ function microphp_access_failure(array $rules): ?string {
 
         $is_valid = false;
         if (is_array($check_value)) {
-            $is_valid = in_array($session_value, $check_value);
+            $is_valid = in_array($session_value, $check_value, true);
         } elseif (is_string($check_value) && preg_match('/^\/.*\/[a-zA-Z]*$/', $check_value)) {
             $is_valid = is_scalar($session_value) && preg_match($check_value, (string) $session_value);
         } else {

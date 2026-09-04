@@ -27,4 +27,19 @@ final class ExceptionHandlerTest extends TestCase
         self::assertStringContainsString('trace', $logged);
         @unlink($log);
     }
+
+    public function testLogMessagesCannotInjectAdditionalLines(): void
+    {
+        $log = tempnam(sys_get_temp_dir(), 'microphp-log-');
+        $logger = new Logger($log);
+        $logger->warning("invalid value\r\n[FORGED] ADMIN: success", ['input' => "one\ntwo"]);
+
+        $contents = (string) file_get_contents($log);
+        $lines = array_values(array_filter(explode(PHP_EOL, $contents), static fn (string $line): bool => $line !== ''));
+        self::assertCount(1, $lines);
+        $entry = json_decode($lines[0], true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame("invalid value\r\n[FORGED] ADMIN: success", $entry['message']);
+        self::assertSame("one\ntwo", $entry['context']['input']);
+        @unlink($log);
+    }
 }

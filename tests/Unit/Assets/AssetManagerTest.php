@@ -51,6 +51,44 @@ final class AssetManagerTest extends TestCase
             \test_remove_tree($aDir); \test_remove_tree($bDir);
         }
     }
+
+    public function testAssetsAreOrderedByScopeInsteadOfRenderTiming(): void
+    {
+        $root = \test_temp_dir('asset-order');
+        mkdir($root . '/global');
+        mkdir($root . '/page');
+        mkdir($root . '/component');
+        foreach (['global', 'page', 'component'] as $scope) {
+            file_put_contents($root . "/{$scope}/style.css", ".{$scope} {}");
+            file_put_contents($root . "/{$scope}/script.js", "window.{$scope} = true;");
+        }
+
+        try {
+            $assets = new AssetManager([$root => '/controlled']);
+
+            // Components can render while page content is being captured,
+            // before the router has registered global and page assets.
+            $assets->registerStyleFile($root . '/component/style.css', AssetManager::PRIORITY_COMPONENT);
+            $assets->registerScriptFile($root . '/component/script.js', AssetManager::PRIORITY_COMPONENT);
+            $assets->registerStyleFile($root . '/global/style.css');
+            $assets->registerScriptFile($root . '/global/script.js');
+            $assets->registerStyleFile($root . '/page/style.css', AssetManager::PRIORITY_PAGE);
+            $assets->registerScriptFile($root . '/page/script.js', AssetManager::PRIORITY_PAGE);
+
+            self::assertSame([
+                '/controlled/global/style.css',
+                '/controlled/page/style.css',
+                '/controlled/component/style.css',
+            ], $assets->styles());
+            self::assertSame([
+                '/controlled/global/script.js',
+                '/controlled/page/script.js',
+                '/controlled/component/script.js',
+            ], $assets->scripts());
+        } finally {
+            \test_remove_tree($root);
+        }
+    }
 }
 
 final class TestAssetComponentA extends Component

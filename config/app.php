@@ -4,13 +4,30 @@
  */
 
 $envFile = ROOT_PATH . '/.env';
-$env = is_file($envFile) ? (parse_ini_file($envFile) ?: []) : [];
+$env = is_file($envFile) ? (parse_ini_file($envFile, false, INI_SCANNER_RAW) ?: []) : [];
 
 // Environment settings.
 // APP_ENV/APP_DEBUG gate error display (see ExceptionHandler) — keep
 // APP_DEBUG off outside local development.
 define('APP_ENV', $env['APP_ENV'] ?? 'production');
 define('APP_DEBUG', filter_var($env['APP_DEBUG'] ?? false, FILTER_VALIDATE_BOOLEAN));
+
+$appUrl = rtrim((string) ($env['APP_URL'] ?? 'http://localhost:8000'), '/');
+$parsedAppUrl = parse_url($appUrl);
+if (
+    filter_var($appUrl, FILTER_VALIDATE_URL) === false ||
+    !is_array($parsedAppUrl) ||
+    !in_array(strtolower((string) ($parsedAppUrl['scheme'] ?? '')), ['http', 'https'], true) ||
+    empty($parsedAppUrl['host']) ||
+    isset($parsedAppUrl['user']) ||
+    isset($parsedAppUrl['pass']) ||
+    isset($parsedAppUrl['query']) ||
+    isset($parsedAppUrl['fragment'])
+) {
+    throw new RuntimeException('APP_URL must be an absolute http:// or https:// URL without credentials, a query, or a fragment.');
+}
+define('APP_URL', $appUrl);
+$appUsesHttps = strtolower((string) $parsedAppUrl['scheme']) === 'https';
 
 // Database settings.
 define('DB_DRIVER', $env['DB_DRIVER'] ?? 'sqlite');
@@ -35,6 +52,32 @@ define('DB_PERSISTENT', filter_var($env['DB_PERSISTENT'] ?? false, FILTER_VALIDA
 define('API_SERVICE_ENABLED', filter_var($env['API_SERVICE_ENABLED'] ?? true, FILTER_VALIDATE_BOOLEAN));
 define('PROJECT_NAME', $env['PROJECT_NAME'] ?? 'MicroPHP Application');
 
+// Session cookies are secure by default when APP_URL uses HTTPS. SameSite=Lax
+// preserves normal inbound navigation while adding defense in depth for CSRF.
+$sessionSameSite = ucfirst(strtolower((string) ($env['SESSION_COOKIE_SAMESITE'] ?? 'Lax')));
+if (!in_array($sessionSameSite, ['Lax', 'Strict', 'None'], true)) {
+    throw new RuntimeException('SESSION_COOKIE_SAMESITE must be Lax, Strict, or None.');
+}
+$sessionSecureCookie = filter_var(
+    $env['SESSION_COOKIE_SECURE'] ?? $appUsesHttps,
+    FILTER_VALIDATE_BOOLEAN
+);
+if ($sessionSameSite === 'None' && !$sessionSecureCookie) {
+    throw new RuntimeException('SESSION_COOKIE_SAMESITE=None requires SESSION_COOKIE_SECURE=true.');
+}
+define('SESSION_COOKIE_SECURE', $sessionSecureCookie);
+define('SESSION_COOKIE_SAMESITE', $sessionSameSite);
+
+// Browser response hardening. Applications can tune the CSP for their own
+// external asset origins while retaining the other safe defaults.
+define('SECURITY_HEADERS_ENABLED', filter_var($env['SECURITY_HEADERS_ENABLED'] ?? true, FILTER_VALIDATE_BOOLEAN));
+define('HSTS_ENABLED', filter_var($env['HSTS_ENABLED'] ?? $appUsesHttps, FILTER_VALIDATE_BOOLEAN));
+define(
+    'CONTENT_SECURITY_POLICY',
+    (string) ($env['CONTENT_SECURITY_POLICY']
+        ?? "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net")
+);
+
 // Frontend page protection mode.
 // guard: use inherited _guard.php files only.
 // middleware: use inherited _middleware.php files only.
@@ -45,7 +88,8 @@ define('PAGE_ACCESS_MODE', strtolower((string) ($env['PAGE_ACCESS_MODE'] ?? 'bot
 // Entries may be MiddlewareInterface instances, callables, or class names that
 // can be constructed by the application container.
 define('FRONTEND_MIDDLEWARE', []);
-define('API_MIDDLEWARE', []);
+define('API_CSRF_ENABLED', filter_var($env['API_CSRF_ENABLED'] ?? true, FILTER_VALIDATE_BOOLEAN));
+define('API_MIDDLEWARE', API_CSRF_ENABLED ? [\MicroPHP\Http\Middleware\CsrfMiddleware::class] : []);
 
 // Application source tree. Mutable application code lives outside the public
 // document root; framework internals stay in src/.

@@ -8,6 +8,7 @@ use MicroPHP\Api;
 use MicroPHP\Application;
 use MicroPHP\Http\Request;
 use MicroPHP\Http\Response;
+use MicroPHP\Security\Csrf;
 use PHPUnit\Framework\TestCase;
 
 final class ApiIntegrationTest extends TestCase
@@ -31,7 +32,7 @@ final class ApiIntegrationTest extends TestCase
         }
         file_put_contents($this->routeDir . '/HEAD.php', '<?php use MicroPHP\\Http\\Response; return fn () => Response::text("explicit head")->withHeader("X-Head", "yes");');
         foreach (['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
-            $response = (new Api())->dispatch(Request::create($method, '/api/v1/' . $this->routeName));
+            $response = (new Api())->dispatch($this->apiRequest($method, '/api/v1/' . $this->routeName));
             self::assertSame($method, json_decode($response->body(), true)['method']);
         }
         $head = (new Api())->dispatch(Request::create('HEAD', '/api/v1/' . $this->routeName));
@@ -46,7 +47,7 @@ final class ApiIntegrationTest extends TestCase
         self::assertSame('explicit', $explicitOptions->header('x-options'));
 
         unlink($this->routeDir . '/POST.php');
-        $notAllowed = (new Api())->dispatch(Request::create('POST', '/api/v1/' . $this->routeName));
+        $notAllowed = (new Api())->dispatch($this->apiRequest('POST', '/api/v1/' . $this->routeName));
         self::assertSame(405, $notAllowed->status());
         self::assertStringNotContainsString('POST', (string) $notAllowed->header('allow'));
     }
@@ -112,5 +113,26 @@ final class ApiIntegrationTest extends TestCase
             self::assertStringNotContainsString($leak, $response->body());
         }
         self::assertSame('INTERNAL_SERVER_ERROR', json_decode($response->body(), true)['error']['code']);
+    }
+
+    public function testApiWriteRequestsRequireCsrfByDefault(): void
+    {
+        file_put_contents($this->routeDir . '/POST.php', '<?php use MicroPHP\\Http\\Response; return fn () => Response::json(["ran" => true]);');
+
+        $missing = (new Api())->dispatch(Request::create('POST', '/api/v1/' . $this->routeName));
+        self::assertSame(419, $missing->status());
+
+        $valid = (new Api())->dispatch($this->apiRequest('POST', '/api/v1/' . $this->routeName));
+        self::assertSame(200, $valid->status());
+    }
+
+    private function apiRequest(string $method, string $path): Request
+    {
+        $headers = [];
+        if (in_array(strtoupper($method), ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+            $headers['X-CSRF-Token'] = app(Csrf::class)->token();
+        }
+
+        return Request::create($method, $path, headers: $headers);
     }
 }

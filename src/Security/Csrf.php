@@ -28,10 +28,31 @@ final class Csrf
             && hash_equals($expected, $submitted);
     }
 
+    /** Generate a fresh token after authentication or another privilege change. */
+    public function rotate(): string
+    {
+        $this->startSession();
+        unset($_SESSION[$this->sessionKey]);
+
+        return $this->token();
+    }
+
     private function startSession(): void
     {
+        // CLI requests have no browser cookie to persist. Keeping the token in
+        // the process-local session array also avoids "headers already sent"
+        // failures in console commands and smoke tests.
+        if (PHP_SAPI === 'cli' && session_status() !== PHP_SESSION_ACTIVE) {
+            if (!isset($_SESSION) || !is_array($_SESSION)) {
+                $_SESSION = [];
+            }
+            return;
+        }
+
         if (session_status() !== PHP_SESSION_ACTIVE) {
-            @session_start();
+            if (!session_start()) {
+                throw new \RuntimeException('Unable to start the session required for CSRF protection.');
+            }
         }
     }
 }

@@ -59,13 +59,31 @@ spl_autoload_register(function (string $class): void {
 
 $sessionPath = ROOT_PATH . '/var/sessions';
 if (!is_dir($sessionPath)) {
-    @mkdir($sessionPath, 0755, true);
+    @mkdir($sessionPath, 0700, true);
 }
 if (is_dir($sessionPath) && is_writable($sessionPath)) {
+    if (DIRECTORY_SEPARATOR !== '\\') {
+        @chmod($sessionPath, 0700);
+    }
     session_save_path($sessionPath);
 }
+
+if (session_status() === PHP_SESSION_NONE) {
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.use_only_cookies', '1');
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => SESSION_COOKIE_SECURE,
+        'httponly' => true,
+        'samesite' => SESSION_COOKIE_SAMESITE,
+    ]);
+}
+
 if (PHP_SAPI !== 'cli' && session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
+    if (!session_start()) {
+        throw new RuntimeException('Unable to start the application session.');
+    }
 }
 
 spl_autoload_register(function (string $class): void {

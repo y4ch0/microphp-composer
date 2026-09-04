@@ -16,7 +16,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 const MICROPHP_SUPPORTED_DB_DRIVERS = ['sqlite', 'mysql', 'mariadb', 'pgsql', 'sqlsrv', 'mongodb'];
-const MICROPHP_SETUP_VERSION = '1.1.2';
+const MICROPHP_SETUP_VERSION = '1.2.0';
 const MICROPHP_EMPTY_VALUE_TOKEN = '-';
 
 $rootPath = dirname(__DIR__);
@@ -133,9 +133,16 @@ function defaultEnvironment(string $rootPath): array
     return [
         'APP_ENV' => 'local',
         'APP_DEBUG' => 'true',
+        'APP_URL' => 'http://localhost:8000',
         'PROJECT_NAME' => $projectName,
         'API_SERVICE_ENABLED' => 'true',
+        'API_CSRF_ENABLED' => 'true',
         'PAGE_ACCESS_MODE' => 'both',
+        'SESSION_COOKIE_SECURE' => 'false',
+        'SESSION_COOKIE_SAMESITE' => 'Lax',
+        'SECURITY_HEADERS_ENABLED' => 'true',
+        'HSTS_ENABLED' => 'false',
+        'CONTENT_SECURITY_POLICY' => "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net",
         'DB_DRIVER' => 'sqlite',
         'DB_DSN' => '',
         'DB_PATH' => 'database/library.db',
@@ -165,10 +172,15 @@ function promptForEnvironment(array $defaults): array
     $values['PROJECT_NAME'] = promptRequired('Project display name', $defaults['PROJECT_NAME']);
     $values['APP_ENV'] = promptRequired('Environment name', $defaults['APP_ENV']);
     $values['APP_DEBUG'] = promptBool('Enable debug output', true) ? 'true' : 'false';
+    $values['APP_URL'] = promptApplicationUrl($defaults['APP_URL']);
     $values['API_SERVICE_ENABLED'] = promptBool('Enable /api routes', true) ? 'true' : 'false';
+    $values['API_CSRF_ENABLED'] = promptBool('Protect API write requests with CSRF', true) ? 'true' : 'false';
     $values['PAGE_ACCESS_MODE'] = promptChoice('Page access mode', ['both', 'middleware', 'guard'], $defaults['PAGE_ACCESS_MODE']);
     $values['VIEW_CACHE_TRUST'] = promptBool('Trust warmed view cache files', false) ? 'true' : 'false';
     $values['DB_DRIVER'] = promptChoice('Database driver', MICROPHP_SUPPORTED_DB_DRIVERS, $defaults['DB_DRIVER']);
+    $usesHttps = str_starts_with(strtolower($values['APP_URL']), 'https://');
+    $values['SESSION_COOKIE_SECURE'] = $usesHttps ? 'true' : 'false';
+    $values['HSTS_ENABLED'] = $usesHttps ? 'true' : 'false';
 
     if ($values['DB_DRIVER'] === 'sqlite') {
         $values['DB_PATH'] = promptRequired('SQLite database path', $defaults['DB_PATH']);
@@ -197,7 +209,7 @@ function promptForEnvironment(array $defaults): array
     $values['DB_NAME'] = promptRequired('Database name', $defaults['DB_NAME']);
     $values['DB_USER'] = promptOptional('Database username', $defaults['DB_USER']);
     $values['DB_PASS'] = promptSecret('Database password', $defaults['DB_PASS']);
-    $values['DB_DSN'] = promptOptional('Explicit DSN override', $defaults['DB_DSN']);
+    $values['DB_DSN'] = promptSecret('Explicit DSN override', $defaults['DB_DSN']);
 
     return $values;
 }
@@ -231,7 +243,45 @@ function promptOptional(string $label, string $suggestion = ''): string
 
 function promptSecret(string $label, string $suggestion = ''): string
 {
-    return promptOptional($label, $suggestion);
+    while (true) {
+        fwrite(STDOUT, "{$label} [hidden; type " . MICROPHP_EMPTY_VALUE_TOKEN . " to leave empty]: ");
+        $answer = readHiddenInputLine();
+        if ($answer === false) {
+            throw new RuntimeException("Input closed while waiting for: {$label}.");
+        }
+
+        $answer = trim($answer);
+        if ($answer === MICROPHP_EMPTY_VALUE_TOKEN) {
+            return '';
+        }
+        if ($answer !== '') {
+            return $answer;
+        }
+
+        echo "Type a value, or type " . MICROPHP_EMPTY_VALUE_TOKEN . " to leave this empty.\n";
+    }
+}
+
+function promptApplicationUrl(string $default): string
+{
+    while (true) {
+        $url = rtrim(promptRequired('Application URL', $default), '/');
+        $parts = parse_url($url);
+        if (
+            filter_var($url, FILTER_VALIDATE_URL) !== false &&
+            is_array($parts) &&
+            in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true) &&
+            !empty($parts['host']) &&
+            !isset($parts['user']) &&
+            !isset($parts['pass']) &&
+            !isset($parts['query']) &&
+            !isset($parts['fragment'])
+        ) {
+            return $url;
+        }
+
+        echo "Enter an absolute http:// or https:// URL without credentials, a query, or a fragment.\n";
+    }
 }
 
 function readPromptAnswer(string $label, string $suggestion = ''): string
@@ -268,6 +318,29 @@ function readInputLine(): string|false
     }
 
     return false;
+}
+
+function readHiddenInputLine(): string|false
+{
+    if (DIRECTORY_SEPARATOR === '\\') {
+        throw new RuntimeException(
+            'Hidden input is unavailable on this terminal. Set DB_PASS/DB_DSN directly in the protected .env file.'
+        );
+    }
+
+    $disableOutput = [];
+    $disableExitCode = 1;
+    exec('stty -echo 2>/dev/null', $disableOutput, $disableExitCode);
+    if ($disableExitCode !== 0) {
+        throw new RuntimeException('Unable to disable terminal echo for secret input.');
+    }
+
+    try {
+        return readInputLine();
+    } finally {
+        exec('stty echo 2>/dev/null');
+        fwrite(STDOUT, PHP_EOL);
+    }
 }
 
 /**
@@ -341,12 +414,24 @@ function promptBool(string $label, bool $default): bool
  */
 function writeEnvironmentFile(string $envPath, array $values): void
 {
+    if (is_link($envPath)) {
+        throw new RuntimeException("Refusing to write environment settings through a symbolic link: {$envPath}");
+    }
+
     $lines = [
         'APP_ENV=' . envValue($values['APP_ENV']),
         'APP_DEBUG=' . envValue($values['APP_DEBUG']),
+        'APP_URL=' . envValue($values['APP_URL']),
         'PROJECT_NAME=' . envValue($values['PROJECT_NAME']),
         'API_SERVICE_ENABLED=' . envValue($values['API_SERVICE_ENABLED']),
+        'API_CSRF_ENABLED=' . envValue($values['API_CSRF_ENABLED']),
         'PAGE_ACCESS_MODE=' . envValue($values['PAGE_ACCESS_MODE']),
+        '',
+        'SESSION_COOKIE_SECURE=' . envValue($values['SESSION_COOKIE_SECURE']),
+        'SESSION_COOKIE_SAMESITE=' . envValue($values['SESSION_COOKIE_SAMESITE']),
+        'SECURITY_HEADERS_ENABLED=' . envValue($values['SECURITY_HEADERS_ENABLED']),
+        'HSTS_ENABLED=' . envValue($values['HSTS_ENABLED']),
+        'CONTENT_SECURITY_POLICY=' . envValue($values['CONTENT_SECURITY_POLICY']),
         '',
         'DB_DRIVER=' . envValue($values['DB_DRIVER']),
         'DB_DSN=' . envValue($values['DB_DSN']),
@@ -363,8 +448,27 @@ function writeEnvironmentFile(string $envPath, array $values): void
         '',
     ];
 
-    if (file_put_contents($envPath, implode(PHP_EOL, $lines)) === false) {
-        throw new RuntimeException("Unable to write {$envPath}");
+    $handle = fopen($envPath, 'c+b');
+    if ($handle === false) {
+        throw new RuntimeException("Unable to open {$envPath}");
+    }
+
+    try {
+        if (DIRECTORY_SEPARATOR !== '\\' && !chmod($envPath, 0600)) {
+            throw new RuntimeException("Unable to secure permissions for {$envPath}");
+        }
+        if (!flock($handle, LOCK_EX) || !ftruncate($handle, 0) || rewind($handle) === false) {
+            throw new RuntimeException("Unable to prepare {$envPath} for writing");
+        }
+
+        $contents = implode(PHP_EOL, $lines);
+        $written = fwrite($handle, $contents);
+        if ($written === false || $written !== strlen($contents) || !fflush($handle)) {
+            throw new RuntimeException("Unable to write {$envPath}");
+        }
+    } finally {
+        flock($handle, LOCK_UN);
+        fclose($handle);
     }
 }
 
@@ -384,15 +488,18 @@ function envValue(string $value): string
 function ensureRuntimeDirectories(string $rootPath): void
 {
     foreach ([
-        'database',
-        'public/assets',
-        'var/cache/views',
-        'var/log',
-        'var/sessions',
-    ] as $relativePath) {
+        'database' => 0750,
+        'public/assets' => 0755,
+        'var/cache/views' => 0750,
+        'var/log' => 0750,
+        'var/sessions' => 0700,
+    ] as $relativePath => $permissions) {
         $path = $rootPath . '/' . $relativePath;
-        if (!is_dir($path) && !mkdir($path, 0775, true) && !is_dir($path)) {
+        if (!is_dir($path) && !mkdir($path, $permissions, true) && !is_dir($path)) {
             throw new RuntimeException("Unable to create {$path}");
+        }
+        if (DIRECTORY_SEPARATOR !== '\\' && !chmod($path, $permissions)) {
+            throw new RuntimeException("Unable to secure directory permissions for {$path}");
         }
     }
 }
@@ -407,6 +514,9 @@ function ensureSqliteDatabase(string $rootPath, array $values): void
     }
 
     $path = normalizeProjectPath($rootPath, $values['DB_PATH']);
+    if (is_link($path)) {
+        throw new RuntimeException("Refusing to create or modify a database through a symbolic link: {$path}");
+    }
     $directory = dirname($path);
     if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
         throw new RuntimeException("Unable to create {$directory}");
@@ -414,6 +524,9 @@ function ensureSqliteDatabase(string $rootPath, array $values): void
 
     if (!is_file($path) && file_put_contents($path, '') === false) {
         throw new RuntimeException("Unable to create {$path}");
+    }
+    if (DIRECTORY_SEPARATOR !== '\\' && !chmod($path, 0600)) {
+        throw new RuntimeException("Unable to secure database permissions for {$path}");
     }
 }
 

@@ -65,4 +65,24 @@ final class DatabaseTest extends TestCase
         self::assertSame(ROOT_PATH . '/database/test.sqlite', Database::resolveSqlitePath('database/test.sqlite'));
         self::assertSame(':memory:', Database::resolveSqlitePath(':memory:'));
     }
+
+    public function testSelectSupportsSafeQualifiedColumnAliases(): void
+    {
+        Database::insert('users', ['name' => 'Ada']);
+
+        $row = Database::table('users')
+            ->select(['users.id AS user_id', 'users.name AS display_name'])
+            ->first();
+
+        self::assertSame(1, $row['user_id']);
+        self::assertSame('Ada', $row['display_name']);
+    }
+
+    public function testSelectRejectsUnsafeAliasExpressions(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('SELECT column');
+
+        Database::table('users')->select('users.id AS id; DROP TABLE users')->toSql();
+    }
 }

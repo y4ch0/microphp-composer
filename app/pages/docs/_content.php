@@ -109,9 +109,13 @@ HTML
             . microphp_docs_code(<<<'TEXT'
 APP_ENV=local
 APP_DEBUG=true
+APP_URL=http://localhost:8000
 PROJECT_NAME="MicroPHP Application"
 API_SERVICE_ENABLED=true
+API_CSRF_ENABLED=true
 PAGE_ACCESS_MODE=both
+SESSION_COOKIE_SAMESITE=Lax
+SECURITY_HEADERS_ENABLED=true
 DB_DRIVER=sqlite
 DB_PATH=database/library.db
 VIEW_CACHE_TRUST=false
@@ -128,7 +132,7 @@ HTML
 composer create-project yacho/microphp my-app
 TEXT)
             . <<<'HTML'
-    <p>The package setup script asks for the project display name, database driver, and related configuration before writing <code>.env</code>. To overwrite an existing environment file and rerun the prompts, use <code>composer run microphp:setup -- --force</code>. The setup wizard always requires an interactive terminal; blank answers are rejected, and optional empty values must be entered explicitly as <code>-</code>.</p>
+    <p>The package setup script asks for the project display name, trusted application URL, database driver, and related configuration before writing <code>.env</code> with owner-only permissions. Password and DSN input is hidden. To overwrite an existing environment file and rerun the prompts, use <code>composer run microphp:setup -- --force</code>. The setup wizard always requires an interactive terminal; blank answers are rejected, and optional empty values must be entered explicitly as <code>-</code>.</p>
 </section>
 HTML,
         ],
@@ -795,6 +799,7 @@ app/components/data-table/script.js
 app/components/button/style.css
 TEXT)
             . <<<'HTML'
+    <p>Assets are emitted in deterministic scope order: global styles and scripts first, page assets second, and component assets last. This ordering is independent of when a component renders, allowing scoped component styles to override global defaults.</p>
 </section>
 
 <section>
@@ -854,7 +859,7 @@ HTML,
             'content' => <<<'HTML'
 <section>
     <h1>Forms, Sessions, and CSRF</h1>
-    <p>MicroPHP configures sessions during bootstrap. When <code>var/sessions</code> exists or can be created, PHP stores session files there.</p>
+    <p>MicroPHP configures sessions during bootstrap. When <code>var/sessions</code> exists or can be created, PHP stores session files there. Strict mode, cookie-only IDs, <code>HttpOnly</code>, and an explicit <code>SameSite</code> policy are enabled; <code>Secure</code> defaults on for HTTPS application URLs.</p>
 </section>
 
 <section>
@@ -922,6 +927,21 @@ HTMLCODE)
 </section>
 
 <section>
+    <h2>CSRF Field in Plain PHP</h2>
+HTML
+            . microphp_docs_code(<<<'PHP'
+<?php use MicroPHP\View; ?>
+
+<form method="post">
+    <?= View::csrfField() ?>
+    <button type="submit">Save</button>
+</form>
+PHP)
+            . <<<'HTML'
+    <p>Plain PHP pages do not need template directives. <code>View::csrfField()</code> emits the same escaped hidden field as <code>@csrf</code>.</p>
+</section>
+
+<section>
     <h2>Submit a Protected Page</h2>
 HTML
             . microphp_docs_code(<<<'PHP'
@@ -945,11 +965,11 @@ HTML
             . microphp_docs_code(<<<'PHP'
 <?php
 
-// Bearer-token APIs do not use session CSRF by default.
-// Attach CsrfMiddleware explicitly when an API authenticates with cookies.
+// API writes require session CSRF by default.
+// Only a strictly bearer-token API should set API_CSRF_ENABLED=false.
 PHP)
             . <<<'HTML'
-    <p>Tokens are accepted only from <code>_token</code> or <code>X-CSRF-Token</code>. <code>X-Requested-With</code> is not a CSRF token.</p>
+    <p>Tokens are accepted only from <code>_token</code> or <code>X-CSRF-Token</code>. <code>X-Requested-With</code> is not a CSRF token. CORS allows the CSRF header by default.</p>
 </section>
 HTML,
         ],
@@ -1791,7 +1811,7 @@ TEXT)
 
 <section>
     <h2>Application Log</h2>
-    <p>The default logger writes to <code>var/log/app.log</code>. The bootstrap file binds <code>MicroPHP\Logger</code> as a singleton.</p>
+    <p>The default logger writes to <code>var/log/app.log</code>. The bootstrap file binds <code>MicroPHP\Logger</code> as a singleton. Every event is one JSON object per line, so control characters in messages remain encoded instead of creating forged entries.</p>
 HTML
             . microphp_docs_code(<<<'PHP'
 <?php
@@ -1809,7 +1829,7 @@ PHP)
 
 <section>
     <h2>Log Levels</h2>
-    <p>The logger provides <code>emergency()</code>, <code>error()</code>, <code>warning()</code>, <code>info()</code>, and <code>debug()</code>. Each method accepts a message and optional context array. Context is stored as JSON on the same log line.</p>
+    <p>The logger provides <code>emergency()</code>, <code>error()</code>, <code>warning()</code>, <code>info()</code>, and <code>debug()</code>. Each method accepts a message and optional context array; the complete event is stored as structured JSON.</p>
 </section>
 
 <section>
@@ -1855,10 +1875,17 @@ HTML,
             </tr>
         </thead>
         <tbody>
-            <tr><td><code>APP_ENV</code></td><td>Current environment name, defaulting to <code>local</code>.</td></tr>
+            <tr><td><code>APP_ENV</code></td><td>Current environment name, defaulting to <code>production</code> when no environment file exists.</td></tr>
             <tr><td><code>APP_DEBUG</code></td><td>Controls detailed error output.</td></tr>
+            <tr><td><code>APP_URL</code></td><td>Trusted absolute application URL used instead of the request Host header.</td></tr>
             <tr><td><code>PROJECT_NAME</code></td><td>Default page title used when no page-specific title is set.</td></tr>
             <tr><td><code>API_SERVICE_ENABLED</code></td><td>Enables or disables handling of <code>/api/</code> requests.</td></tr>
+            <tr><td><code>API_CSRF_ENABLED</code></td><td>Protects API write requests by default; disable only for strictly bearer-token APIs.</td></tr>
+            <tr><td><code>SESSION_COOKIE_SECURE</code></td><td>Restricts the session cookie to HTTPS; defaults from <code>APP_URL</code>.</td></tr>
+            <tr><td><code>SESSION_COOKIE_SAMESITE</code></td><td>Session cookie policy: <code>Lax</code>, <code>Strict</code>, or secure <code>None</code>.</td></tr>
+            <tr><td><code>SECURITY_HEADERS_ENABLED</code></td><td>Enables central browser security response headers.</td></tr>
+            <tr><td><code>HSTS_ENABLED</code></td><td>Adds HSTS on secure requests; defaults from <code>APP_URL</code>.</td></tr>
+            <tr><td><code>CONTENT_SECURITY_POLICY</code></td><td>Application CSP; update its source allowlists when adding external assets.</td></tr>
             <tr><td><code>PAGE_ACCESS_MODE</code></td><td>Chooses frontend page protection: <code>guard</code>, <code>middleware</code>, or <code>both</code>.</td></tr>
             <tr><td><code>FRONTEND_MIDDLEWARE</code></td><td>Global middleware entries for the frontend router.</td></tr>
             <tr><td><code>API_MIDDLEWARE</code></td><td>Global middleware entries for the API router.</td></tr>

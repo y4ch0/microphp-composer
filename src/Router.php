@@ -431,11 +431,11 @@ class Router
         $assetFilePath = rtrim(self::pagesPath(), '/\\') . '/' . implode('/', $assetPathSegments);
 
         if (file_exists($assetFilePath . '/style.css')) {
-            $this->assets->registerStyleFile($assetFilePath . '/style.css');
+            $this->assets->registerStyleFile($assetFilePath . '/style.css', AssetManager::PRIORITY_PAGE);
         }
 
         if (file_exists($assetFilePath . '/script.js')) {
-            $this->assets->registerScriptFile($assetFilePath . '/script.js');
+            $this->assets->registerScriptFile($assetFilePath . '/script.js', AssetManager::PRIORITY_PAGE);
         }
     }
 

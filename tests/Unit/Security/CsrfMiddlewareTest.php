@@ -56,4 +56,15 @@ final class CsrfMiddlewareTest extends TestCase
         );
         self::assertSame(200, $response->status());
     }
+
+    public function testTokenCanBeRotatedAfterPrivilegeChanges(): void
+    {
+        $csrf = new Csrf();
+        $original = $csrf->token();
+        $rotated = $csrf->rotate();
+
+        self::assertNotSame($original, $rotated);
+        self::assertFalse($csrf->validate($original));
+        self::assertTrue($csrf->validate($rotated));
+    }
 }

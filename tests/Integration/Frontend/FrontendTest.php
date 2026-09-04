@@ -33,4 +33,38 @@ final class FrontendTest extends TestCase
         self::assertSame('', $response->body());
         self::assertStringContainsString('text/css', (string) $response->header('content-type'));
     }
+
+    public function testApplicationAddsSecurityHeaders(): void
+    {
+        $response = (new Application(app()))->handle(Request::create(
+            'GET',
+            '/definitely-missing',
+            server: ['HTTPS' => 'on', 'SERVER_PORT' => 443]
+        ));
+
+        self::assertSame('nosniff', $response->header('x-content-type-options'));
+        self::assertSame('SAMEORIGIN', $response->header('x-frame-options'));
+        self::assertNotNull($response->header('content-security-policy'));
+        if (HSTS_ENABLED) {
+            self::assertStringContainsString('max-age=', (string) $response->header('strict-transport-security'));
+        } else {
+            self::assertNull($response->header('strict-transport-security'));
+        }
+    }
+
+    public function testRenderedAssetsUseGlobalPageComponentCascadeOrder(): void
+    {
+        $response = (new Router())->dispatch(Request::create('GET', '/article/101'));
+        $body = $response->body();
+
+        $global = strpos($body, '/assets/application/css/global.css');
+        $page = strpos($body, '/assets/pages/article/%5BarticleId%5D/style.css');
+        $component = strpos($body, '/assets/components/button/style.css');
+
+        self::assertNotFalse($global);
+        self::assertNotFalse($page);
+        self::assertNotFalse($component);
+        self::assertLessThan($page, $global);
+        self::assertLessThan($component, $page);
+    }
 }

@@ -13,7 +13,7 @@ class ViewCache
     private bool $trustCache;
 
     /** Permissions for a newly created cache directory — no write access for "others". */
-    private const DIR_PERMISSIONS = 0755;
+    private const DIR_PERMISSIONS = 0750;
 
     /**
      * Create a cache manager for compiled templates.
@@ -193,6 +193,9 @@ class ViewCache
     private function ensureCacheDirExists(): void
     {
         if (is_dir($this->cachePath)) {
+            if (DIRECTORY_SEPARATOR !== '\\') {
+                @chmod($this->cachePath, self::DIR_PERMISSIONS);
+            }
             return;
         }
         if (!@mkdir($this->cachePath, self::DIR_PERMISSIONS, true) && !is_dir($this->cachePath)) {

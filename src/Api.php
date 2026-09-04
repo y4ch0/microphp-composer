@@ -38,7 +38,7 @@ class Api
     private static array $defaultCorsConfig = [
         'allowed_origins' => [],
         'allowed_methods' => ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        'allowed_headers' => ['Content-Type', 'Authorization'],
+        'allowed_headers' => ['Content-Type', 'Authorization', 'X-CSRF-Token'],
         'max_age' => 86400,
     ];
 
@@ -239,6 +239,14 @@ class Api
     {
         $body = $data === null ? null : (string) json_encode($data, JSON_UNESCAPED_UNICODE);
         $headers = $data === null ? [] : ['Content-Type' => 'application/json'];
+        if (
+            (!defined('API_CSRF_ENABLED') || API_CSRF_ENABLED === true) &&
+            in_array(strtoupper($method), ['POST', 'PUT', 'PATCH', 'DELETE'], true)
+        ) {
+            $headers['X-CSRF-Token'] = (function_exists('app')
+                ? app(\MicroPHP\Security\Csrf::class)
+                : new \MicroPHP\Security\Csrf())->token();
+        }
         $uri = trim($uri, '/');
         $path = ($uri === 'api' || str_starts_with($uri, 'api/')) ? '/' . $uri : '/api/' . $uri;
         $request = Request::create(

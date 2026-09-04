@@ -5,6 +5,7 @@ use MicroPHP\View;
 if ($request->isMethod('POST')) {
     unset($_SESSION['user']);
     session_regenerate_id(true);
+    app(\MicroPHP\Security\Csrf::class)->rotate();
     echo 'User destroyed';
     return;
 }

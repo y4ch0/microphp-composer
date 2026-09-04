@@ -40,7 +40,31 @@ final class Application
 
     private function finalize(Request $request, Response $response): Response
     {
+        if (!defined('SECURITY_HEADERS_ENABLED') || SECURITY_HEADERS_ENABLED === true) {
+            $response = $response
+                ->withHeader('X-Content-Type-Options', 'nosniff')
+                ->withHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+                ->withHeader('X-Frame-Options', 'SAMEORIGIN')
+                ->withHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+
+            $csp = defined('CONTENT_SECURITY_POLICY') ? trim((string) CONTENT_SECURITY_POLICY) : '';
+            if ($csp !== '') {
+                $response = $response->withHeader('Content-Security-Policy', $csp);
+            }
+
+            if (defined('HSTS_ENABLED') && HSTS_ENABLED === true && $this->isSecureRequest($request)) {
+                $response = $response->withHeader('Strict-Transport-Security', 'max-age=31536000');
+            }
+        }
+
         return $request->method() === 'HEAD' ? $response->withoutBody() : $response;
+    }
+
+    private function isSecureRequest(Request $request): bool
+    {
+        $https = strtolower((string) $request->server('HTTPS', ''));
+
+        return ($https !== '' && $https !== 'off') || (int) $request->server('SERVER_PORT', 0) === 443;
     }
 
     private function isApiRequest(Request $request): bool

@@ -11,6 +11,6 @@ $meta = [
 <p>Welcome to the admin dashboard.</p>
 <p>This page automatically uses the "admin" layout and inherits its base metadata from the files in the <code>/Pages/admin/</code> directory.</p>
 
-<p>Here is string of path with domain: <code><?php echo current_url(); ?></code></p>
+<p>Here is string of path with domain: <code><?php echo htmlspecialchars(current_url(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></code></p>
 
-<p>However you can just check current route without domain: <code><?php echo current_path(); ?></code></p>
+<p>However you can just check current route without domain: <code><?php echo htmlspecialchars((string) current_path(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></code></p>

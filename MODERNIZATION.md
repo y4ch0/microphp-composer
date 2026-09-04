@@ -31,9 +31,17 @@ files are loaded only from the validated version tree.
   expressions; `{!! ... !!}` remains the explicit raw-output form.
 - `View::render()` and `renderFile()` are confined to page/component roots.
   `renderTrustedFile()` clearly names the trusted bypass.
-- Frontend POST, PUT, PATCH, and DELETE requests require the session token from
-  `_token` or `X-CSRF-Token`. `X-Requested-With` is never accepted as a token.
-  Session CSRF is not automatically attached to bearer-token APIs.
+- Frontend and API POST, PUT, PATCH, and DELETE requests require the session
+  token from `_token` or `X-CSRF-Token` by default. `X-Requested-With` is never
+  accepted as a token. Strictly bearer-token APIs may explicitly set
+  `API_CSRF_ENABLED=false`.
+- Session startup enables strict mode, cookie-only IDs, `HttpOnly`, explicit
+  `SameSite`, and HTTPS-derived `Secure` cookies. Central response finalization
+  adds CSP, MIME-sniffing, framing, referrer, permissions-policy, and optional
+  HSTS headers.
+- Absolute URLs use configured `APP_URL`, authorization allowlists compare
+  types strictly, and logs use one JSON object per line so CR/LF in untrusted
+  messages cannot forge entries.
 - Component/page/layout assets belong to one request-scoped `AssetManager`.
   There is no component static queue or reset hook, making sequential
   persistent-worker requests isolated.

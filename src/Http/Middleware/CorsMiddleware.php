@@ -20,7 +20,7 @@ final class CorsMiddleware implements MiddlewareInterface
     public function __construct(
         private array $allowedOrigins = [],
         private array $allowedMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        private array $allowedHeaders = ['Content-Type', 'Authorization'],
+        private array $allowedHeaders = ['Content-Type', 'Authorization', 'X-CSRF-Token'],
         private int $maxAge = 86400,
     ) {
     }
@@ -31,7 +31,7 @@ final class CorsMiddleware implements MiddlewareInterface
         return new self(
             allowedOrigins: $config['allowed_origins'] ?? [],
             allowedMethods: $config['allowed_methods'] ?? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-            allowedHeaders: $config['allowed_headers'] ?? ['Content-Type', 'Authorization'],
+            allowedHeaders: $config['allowed_headers'] ?? ['Content-Type', 'Authorization', 'X-CSRF-Token'],
             maxAge: (int) ($config['max_age'] ?? 86400),
         );
     }

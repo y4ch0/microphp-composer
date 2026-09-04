@@ -40,6 +40,7 @@ final class QueryBuilder
 {
     private const IDENTIFIER_PATTERN = '/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/';
     private const SIMPLE_IDENTIFIER_PATTERN = '/^[A-Za-z_][A-Za-z0-9_]*$/';
+    private const ALIASED_IDENTIFIER_PATTERN = '/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\s+AS\s+[A-Za-z_][A-Za-z0-9_]*$/i';
     private const OPERATORS = ['=', '<>', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE'];
 
     private array $columns = ['*'];
@@ -331,7 +332,10 @@ final class QueryBuilder
             return;
         }
 
-        if (preg_match('/^COUNT\(\*\)\s+AS\s+[A-Za-z_][A-Za-z0-9_]*$/i', $column)) {
+        if (
+            preg_match(self::ALIASED_IDENTIFIER_PATTERN, $column) ||
+            preg_match('/^COUNT\(\*\)\s+AS\s+[A-Za-z_][A-Za-z0-9_]*$/i', $column)
+        ) {
             return;
         }
 

@@ -15,21 +15,26 @@ class Logger
     {
         $dir = dirname($logFile);
         if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
+            @mkdir($dir, 0750, true);
+        }
+        if (is_dir($dir) && DIRECTORY_SEPARATOR !== '\\') {
+            @chmod($dir, 0750);
         }
     }
 
     /** @param array<string,mixed> $context */
     public function log(string $level, string $message, array $context = []): void
     {
-        $line = sprintf(
-            '[%s] %s: %s %s' . PHP_EOL,
-            date('Y-m-d H:i:s'),
-            strtoupper($level),
-            $message,
-            $context !== [] ? json_encode($context, JSON_UNESCAPED_UNICODE) : ''
-        );
-        @file_put_contents($this->logFile, $line, FILE_APPEND | LOCK_EX);
+        $line = json_encode([
+            'timestamp' => date(DATE_ATOM),
+            'level' => strtoupper($level),
+            'message' => $message,
+            'context' => $context,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+
+        if (is_string($line) && @file_put_contents($this->logFile, $line . PHP_EOL, FILE_APPEND | LOCK_EX) !== false) {
+            @chmod($this->logFile, 0600);
+        }
     }
 
     /** @param array<string,mixed> $context */

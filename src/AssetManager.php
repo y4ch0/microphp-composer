@@ -6,9 +6,14 @@ namespace MicroPHP;
 
 final class AssetManager
 {
-    /** @var array<string,string> */ private array $styles = [];
-    /** @var array<string,string> */ private array $scripts = [];
+    public const PRIORITY_GLOBAL = 10;
+    public const PRIORITY_PAGE = 20;
+    public const PRIORITY_COMPONENT = 30;
+
+    /** @var array<string,array{url:string,priority:int,order:int}> */ private array $styles = [];
+    /** @var array<string,array{url:string,priority:int,order:int}> */ private array $scripts = [];
     /** @var array<string,string> */ private array $roots;
+    private int $registrationOrder = 0;
 
     /** @param array<string,string>|null $roots Filesystem root => public URL root. */
     public function __construct(?array $roots = null)
@@ -28,27 +33,38 @@ final class AssetManager
         }
     }
 
-    public function registerStyleFile(string $file): void { $this->registerFile($file, 'css', $this->styles); }
-    public function registerScriptFile(string $file): void { $this->registerFile($file, 'js', $this->scripts); }
-
-    public function registerStyleUrl(string $url): void
+    public function registerStyleFile(string $file, int $priority = self::PRIORITY_GLOBAL): void
     {
-        if ($this->isControlledUrl($url)) { $this->styles[$url] = $url; }
+        $this->registerFile($file, 'css', $priority, $this->styles);
     }
 
-    public function registerScriptUrl(string $url): void
+    public function registerScriptFile(string $file, int $priority = self::PRIORITY_GLOBAL): void
     {
-        if ($this->isControlledUrl($url)) { $this->scripts[$url] = $url; }
+        $this->registerFile($file, 'js', $priority, $this->scripts);
+    }
+
+    public function registerStyleUrl(string $url, int $priority = self::PRIORITY_GLOBAL): void
+    {
+        if ($this->isControlledUrl($url)) { $this->registerUrl($url, $priority, $this->styles); }
+    }
+
+    public function registerScriptUrl(string $url, int $priority = self::PRIORITY_GLOBAL): void
+    {
+        if ($this->isControlledUrl($url)) { $this->registerUrl($url, $priority, $this->scripts); }
     }
 
     public function registerComponentDirectory(string $directory): void
     {
-        if (is_file($directory . '/style.css')) { $this->registerStyleFile($directory . '/style.css'); }
-        if (is_file($directory . '/script.js')) { $this->registerScriptFile($directory . '/script.js'); }
+        if (is_file($directory . '/style.css')) {
+            $this->registerStyleFile($directory . '/style.css', self::PRIORITY_COMPONENT);
+        }
+        if (is_file($directory . '/script.js')) {
+            $this->registerScriptFile($directory . '/script.js', self::PRIORITY_COMPONENT);
+        }
     }
 
-    /** @return string[] */ public function styles(): array { return array_values($this->styles); }
-    /** @return string[] */ public function scripts(): array { return array_values($this->scripts); }
+    /** @return string[] */ public function styles(): array { return $this->orderedUrls($this->styles); }
+    /** @return string[] */ public function scripts(): array { return $this->orderedUrls($this->scripts); }
 
     public function stylesHtml(): string
     {
@@ -66,8 +82,8 @@ final class AssetManager
         ));
     }
 
-    /** @param array<string,string> $target */
-    private function registerFile(string $file, string $extension, array &$target): void
+    /** @param array<string,array{url:string,priority:int,order:int}> $target */
+    private function registerFile(string $file, string $extension, int $priority, array &$target): void
     {
         $real = realpath($file);
         if ($real === false || !is_file($real) || strtolower(pathinfo($real, PATHINFO_EXTENSION)) !== $extension) {
@@ -79,9 +95,46 @@ final class AssetManager
             }
             $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($real, strlen($root) + 1));
             $url = $urlRoot . '/' . implode('/', array_map('rawurlencode', explode('/', $relative)));
-            $target[$real] = $url;
+            $this->registerEntry($real, $url, $priority, $target);
             return;
         }
+    }
+
+    /** @param array<string,array{url:string,priority:int,order:int}> $target */
+    private function registerUrl(string $url, int $priority, array &$target): void
+    {
+        $this->registerEntry('url:' . $url, $url, $priority, $target);
+    }
+
+    /** @param array<string,array{url:string,priority:int,order:int}> $target */
+    private function registerEntry(string $key, string $url, int $priority, array &$target): void
+    {
+        if (isset($target[$key])) {
+            // If an asset belongs to more than one scope, keep it in the most
+            // specific (latest) scope without emitting it twice.
+            $target[$key]['priority'] = max($target[$key]['priority'], $priority);
+            return;
+        }
+
+        $target[$key] = [
+            'url' => $url,
+            'priority' => $priority,
+            'order' => $this->registrationOrder++,
+        ];
+    }
+
+    /**
+     * @param array<string,array{url:string,priority:int,order:int}> $entries
+     * @return string[]
+     */
+    private function orderedUrls(array $entries): array
+    {
+        $entries = array_values($entries);
+        usort($entries, static fn (array $left, array $right): int =>
+            [$left['priority'], $left['order']] <=> [$right['priority'], $right['order']]
+        );
+
+        return array_column($entries, 'url');
     }
 
     private function isControlledUrl(string $url): bool

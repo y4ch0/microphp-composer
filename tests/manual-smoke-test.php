@@ -192,7 +192,11 @@ $fsDynamic = (new Api())->dispatch(Request::create('GET', '/api/v1/status/abc'))
 $fsDynamicPayload = json_decode($fsDynamic->body(), true);
 check('filesystem API route params use Request::route()', ($fsDynamicPayload['id'] ?? null) === 'abc');
 
-$fsMethodNotAllowed = (new Api())->dispatch(Request::create('POST', '/api/v1/status'));
+$fsMethodNotAllowed = (new Api())->dispatch(Request::create(
+    'POST',
+    '/api/v1/status',
+    headers: ['X-CSRF-Token' => app(\MicroPHP\Security\Csrf::class)->token()]
+));
 check('filesystem API returns 405 for known route with unsupported method', $fsMethodNotAllowed->status() === 405);
 check('filesystem API 405 includes Allow header', ($fsMethodNotAllowed->headers()['Allow'] ?? null) === 'GET, HEAD, OPTIONS');
 
@@ -247,7 +251,10 @@ try {
     $generatedResponse = (new Api())->dispatch(Request::create(
         method: 'POST',
         path: '/api/v1/' . $generatedRouteName . '/123',
-        headers: ['Content-Type' => 'application/json'],
+        headers: [
+            'Content-Type' => 'application/json',
+            'X-CSRF-Token' => app(\MicroPHP\Security\Csrf::class)->token(),
+        ],
         rawBody: '{"name":"Ada"}',
     ));
     $generatedPayload = json_decode($generatedResponse->body(), true);
@@ -451,10 +458,13 @@ try {
     check('operator condition ([operator, value]) matches the row', count($matches) >= 1);
 
     $joined = Database::join('wypozyczenie', 'uzytkownik', 'wypozyczenie.id_uzytkownik', 'uzytkownik.id')
-        ->select(['wypozyczenie.id', 'uzytkownik.imie'])
+        ->select(['wypozyczenie.id AS lend_id', 'uzytkownik.imie AS reader_name'])
         ->limit(1)
         ->get();
-    check('Database::join returns rows from matching tables', is_array($joined));
+    check(
+        'Database::join supports safe selected-column aliases',
+        ($joined[0]['lend_id'] ?? null) === 1 && ($joined[0]['reader_name'] ?? null) === 'Ada'
+    );
 
     $deleted = Database::delete('posts', ['id' => $newId]);
     check('delete reports one row deleted', $deleted === 1);

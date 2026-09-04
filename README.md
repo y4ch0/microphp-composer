@@ -33,6 +33,8 @@ composer run microphp:setup -- --force
 
 The setup wizard always requires an interactive terminal. Blank answers are
 rejected, and optional empty values must be entered explicitly as `-`.
+Secret input is hidden, `.env` is written with owner-only permissions on Unix,
+and private runtime directories are not accessible to other local users.
 
 ## Local Development
 
@@ -71,14 +73,21 @@ GET without a body; OPTIONS may be explicit or generated automatically.
 
 `_middleware.php` is inherited from root to leaf for pages and API resources.
 Legacy `_guard.php` files are adapted into that middleware pipeline; migrate
-their authorization callback to `_middleware.php`. Browser POST, PUT, PATCH,
-and DELETE requests pass through CSRF middleware and must provide `_token` or
-`X-CSRF-Token`. Bearer-token APIs do not receive session CSRF automatically.
+their authorization callback to `_middleware.php`. Browser and API POST, PUT,
+PATCH, and DELETE requests pass through CSRF middleware by default and must
+provide `_token` or `X-CSRF-Token`. A strictly bearer-token API may explicitly
+set `API_CSRF_ENABLED=false`; do not disable it for cookie-authenticated APIs.
 
-Unexpected errors are logged with exception context. Production APIs receive a
-stable JSON error object and frontend requests receive safe HTML; neither leaks
-the original exception. Use `Response::error($message, $status, $code)` for
-deliberate client-facing errors.
+Sessions use strict mode, cookie-only identifiers, `HttpOnly`, and an explicit
+`SameSite` policy. `Secure` cookies and HSTS default on when `APP_URL` uses
+HTTPS. Application responses also receive CSP, MIME-sniffing, referrer,
+framing, and permissions-policy headers. Tune `CONTENT_SECURITY_POLICY` when
+adding trusted external asset origins.
+
+Unexpected errors are logged as one JSON object per line with exception
+context. Production APIs receive a stable JSON error object and frontend
+requests receive safe HTML; neither leaks the original exception. Use
+`Response::error($message, $status, $code)` for deliberate client-facing errors.
 
 ## Views, Assets, and Workers
 
@@ -91,7 +100,9 @@ files.
 Every frontend dispatch owns a fresh `AssetManager`. Page, layout, application,
 and component assets are deduplicated in deterministic order and translated
 only from known filesystem roots, so component assets cannot leak between
-persistent-worker requests.
+persistent-worker requests. Assets are emitted by scope—not by render timing:
+global CSS/JavaScript first, page assets second, and component assets last, so
+scoped component rules can override application defaults.
 
 ## Database Safety
 
